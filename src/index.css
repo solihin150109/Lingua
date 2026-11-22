@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --lingua-navy: #243B53;
+    --lingua-slate: #486581;
+    --lingua-teal: #3C8D8A;
+    --lingua-sage: #E6F0ED;
+    --lingua-bg: #F7F8FA;
+    --lingua-surface: #FFFFFF;
+    --lingua-border: #E4E8EE;
+    --lingua-text: #243447;
+    --lingua-text-secondary: #718096;
+    --lingua-text-muted: #A0AEC0;
+    --lingua-gold: #D6AD60;
+    --lingua-success: #39856A;
+    --lingua-warning: #D69E36;
+    --lingua-error: #D65A5A;
+    --lingua-info: #527DA8;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #F7F8FA;
+    color: #243447;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html.dark body {
+    background-color: #0F1722;
+    color: #F1F5F9;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}

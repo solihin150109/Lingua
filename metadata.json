@@ -1,0 +1,6 @@
+{
+  "name": "LINGUA — English Learning & Speaking Platform",
+  "description": "Interactive AI-powered English learning platform with smart vocabulary breakdown, grammar center, sentence builder, real-time Gemini Live voice tutor, and WebRTC speaking community.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

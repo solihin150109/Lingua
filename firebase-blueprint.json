@@ -1,0 +1,369 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private user account PII and authentication metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "role": { "type": "string", "enum": ["learner"] },
+        "blockedUserIds": { "type": "array", "description": "Bounded list of blocked user IDs" },
+        "audioConsentGranted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "createdAt", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public-safe learner profile visible in Speaking Community",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "level": { "type": "string", "enum": ["A1-A2", "B1-B2", "C1-C2"] },
+        "learningGoals": { "type": "string", "maxLength": 300 },
+        "preferredAccent": { "type": "string", "enum": ["American", "British"] },
+        "dailyTargetMinutes": { "type": "number" },
+        "streakDays": { "type": "number" },
+        "xpPoints": { "type": "number" },
+        "onboardingCompleted": { "type": "boolean" },
+        "isOnline": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "level", "preferredAccent", "dailyTargetMinutes", "streakDays", "xpPoints", "onboardingCompleted", "updatedAt"]
+    },
+    "VocabularyItem": {
+      "title": "VocabularyItem",
+      "description": "User vocabulary word with phonetic, meaning, and spaced repetition metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "word": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "meaningId": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "category": { "type": "string", "enum": ["noun", "verb", "adjective", "adverb", "preposition", "phrase", "other"] },
+        "ipa": { "type": "string", "maxLength": 100 },
+        "grammarExplanation": { "type": "string", "maxLength": 1500 },
+        "synonyms": { "type": "array" },
+        "antonyms": { "type": "array" },
+        "relatedWords": { "type": "array" },
+        "commonUsage": { "type": "string", "maxLength": 600 },
+        "collocations": { "type": "array" },
+        "phrasalVerbs": { "type": "array" },
+        "commonMistakes": { "type": "array" },
+        "dailyConversations": { "type": "array" },
+        "masteryStatus": { "type": "string", "enum": ["New", "Learning", "Familiar", "Mastered"] },
+        "reviewCount": { "type": "number" },
+        "errorCount": { "type": "number" },
+        "isFavorite": { "type": "boolean" },
+        "nextReviewAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "word", "meaningId", "category", "masteryStatus", "reviewCount", "errorCount", "isFavorite", "createdAt", "updatedAt"]
+    },
+    "VocabularySentence": {
+      "title": "VocabularySentence",
+      "description": "Tense-based example sentence and grammatical breakdown for a vocabulary word",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "vocabId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tense": { "type": "string", "maxLength": 80 },
+        "sentence": { "type": "string", "maxLength": 300 },
+        "translationId": { "type": "string", "maxLength": 300 },
+        "formula": { "type": "string", "maxLength": 160 },
+        "subject": { "type": "string", "maxLength": 80 },
+        "verb": { "type": "string", "maxLength": 80 },
+        "objectComplement": { "type": "string", "maxLength": 160 },
+        "structureReason": { "type": "string", "maxLength": 400 },
+        "dailyUsage": { "type": "string", "maxLength": 400 },
+        "affirmative": { "type": "string", "maxLength": 300 },
+        "negative": { "type": "string", "maxLength": 300 },
+        "interrogative": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "vocabId", "tense", "sentence", "translationId", "formula", "createdAt"]
+    },
+    "GrammarLessonProgress": {
+      "title": "GrammarLessonProgress",
+      "description": "Learner progress and quiz score per grammar topic",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "topicId": { "type": "string", "maxLength": 80 },
+        "category": { "type": "string", "enum": ["Basic Grammar", "Tenses", "Advanced Grammar"] },
+        "completed": { "type": "boolean" },
+        "quizScore": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "topicId", "category", "completed", "quizScore", "updatedAt"]
+    },
+    "LearningProgress": {
+      "title": "LearningProgress",
+      "description": "Aggregated learning progress and weekly statistics for a user",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "vocabTotal": { "type": "number" },
+        "vocabMastered": { "type": "number" },
+        "grammarCompleted": { "type": "number" },
+        "speakingMinutes": { "type": "number" },
+        "lastModule": { "type": "string", "maxLength": 80 },
+        "lastLessonTitle": { "type": "string", "maxLength": 160 },
+        "weeklyMinutes": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "vocabTotal", "vocabMastered", "grammarCompleted", "speakingMinutes", "updatedAt"]
+    },
+    "QuizResult": {
+      "title": "QuizResult",
+      "description": "Result of vocabulary, grammar, listening, or placement quiz",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "quizType": { "type": "string", "enum": ["vocabulary", "grammar", "listening", "placement", "sentence-builder"] },
+        "topic": { "type": "string", "maxLength": 120 },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "quizType", "topic", "score", "totalQuestions", "createdAt"]
+    },
+    "SpeakingSession": {
+      "title": "SpeakingSession",
+      "description": "Record of an AI Tutor, Simulator, or Peer Speaking Community session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "hostId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "peerId": { "type": "string", "maxLength": 128 },
+        "participantIds": { "type": "array" },
+        "sessionType": { "type": "string", "enum": ["ai-tutor", "community", "simulator"] },
+        "topic": { "type": "string", "maxLength": 120 },
+        "tutorId": { "type": "string", "maxLength": 64 },
+        "durationSeconds": { "type": "number" },
+        "rating": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "summaryText": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "hostId", "participantIds", "sessionType", "topic", "durationSeconds", "status", "createdAt", "updatedAt"]
+    },
+    "ConversationTranscript": {
+      "title": "ConversationTranscript",
+      "description": "Transcript lines for a speaking session with user consent",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "participantIds": { "type": "array" },
+        "entries": { "type": "array" },
+        "consentGranted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sessionId", "ownerId", "participantIds", "entries", "consentGranted", "createdAt"]
+    },
+    "TutorPreference": {
+      "title": "TutorPreference",
+      "description": "User preferences for AI Native Speaker Tutor",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "selectedTutorId": { "type": "string", "maxLength": 64 },
+        "preferredMode": { "type": "string", "maxLength": 64 },
+        "showTranslations": { "type": "boolean" },
+        "speakingSpeed": { "type": "string", "enum": ["slow", "normal", "natural"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "selectedTutorId", "preferredMode", "showTranslations", "speakingSpeed", "updatedAt"]
+    },
+    "UserConnection": {
+      "title": "UserConnection",
+      "description": "Speaking community invitation or connection between two learners",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "requesterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "participantIds": { "type": "array" },
+        "status": { "type": "string", "enum": ["invited", "accepted", "rejected", "blocked"] },
+        "topic": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "requesterId", "targetId", "participantIds", "status", "topic", "createdAt", "updatedAt"]
+    },
+    "NotificationItem": {
+      "title": "NotificationItem",
+      "description": "User notification for reminders, invitations, and achievements",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["reminder", "review", "invite", "invite_accepted", "achievement", "challenge", "milestone"] },
+        "title": { "type": "string", "maxLength": 120 },
+        "body": { "type": "string", "maxLength": 400 },
+        "read": { "type": "boolean" },
+        "actionRoute": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "type", "title", "body", "read", "createdAt"]
+    },
+    "AchievementUnlock": {
+      "title": "AchievementUnlock",
+      "description": "Unlocked achievement badge for a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "badgeKey": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 240 },
+        "unlockedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "badgeKey", "title", "unlockedAt"]
+    },
+    "DailyChallengeProgress": {
+      "title": "DailyChallengeProgress",
+      "description": "Completion state of daily learning challenge",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "dateKey": { "type": "string", "maxLength": 20 },
+        "title": { "type": "string", "maxLength": 120 },
+        "completed": { "type": "boolean" },
+        "xpAwarded": { "type": "number" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "dateKey", "title", "completed", "xpAwarded", "completedAt"]
+    },
+    "SafetyReport": {
+      "title": "SafetyReport",
+      "description": "Community safety report submitted by a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reporterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reportedUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "reason": { "type": "string", "minLength": 3, "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "reporterId", "reportedUserId", "reason", "createdAt"]
+    },
+    "LearningInsight": {
+      "title": "LearningInsight",
+      "description": "Structured cross-module mistake insight and grammar recommendation captured for a user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sourceModule": { "type": "string", "enum": ["ai-tutor", "speaking-community", "sentence-builder", "grammar-analyzer", "simulator"] },
+        "mistakeOriginal": { "type": "string", "maxLength": 300 },
+        "correction": { "type": "string", "maxLength": 300 },
+        "explanation": { "type": "string", "maxLength": 600 },
+        "grammarTopicId": { "type": "string", "maxLength": 80 },
+        "vocabWord": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "sourceModule", "mistakeOriginal", "correction", "explanation", "grammarTopicId", "createdAt"]
+    },
+    "LearnerMemory": {
+      "title": "LearnerMemory",
+      "description": "Compact per-user AI memory summarizing grammar weaknesses, cached AI path, evaluation, daily challenge, and audio evidence",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "grammarWeaknesses": { "type": "array" },
+        "weakVocabWords": { "type": "array" },
+        "recentSessionSummaries": { "type": "array" },
+        "pronunciationSamplesCount": { "type": "number" },
+        "pronunciationAvgMatch": { "type": "number" },
+        "personalizedPathJson": { "type": "string", "maxLength": 8000 },
+        "lastEvaluationJson": { "type": "string", "maxLength": 8000 },
+        "dailyChallengeJson": { "type": "string", "maxLength": 4000 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "grammarWeaknesses", "weakVocabWords", "recentSessionSummaries", "pronunciationSamplesCount", "pronunciationAvgMatch", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private user account PII isolated from public profiles"
+    },
+    "/userProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Public learner cards for Speaking Community matching"
+    },
+    "/vocabulary/{vocabId}": {
+      "schema": { "$ref": "#/entities/VocabularyItem" },
+      "description": "User personal vocabulary items"
+    },
+    "/vocabularySentences/{sentenceId}": {
+      "schema": { "$ref": "#/entities/VocabularySentence" },
+      "description": "Generated tense-based sentences linked to vocabulary items"
+    },
+    "/grammarLessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/GrammarLessonProgress" },
+      "description": "User grammar lesson progress and scores"
+    },
+    "/learningProgress/{userId}": {
+      "schema": { "$ref": "#/entities/LearningProgress" },
+      "description": "Aggregated user learning progress metrics"
+    },
+    "/quizResults/{resultId}": {
+      "schema": { "$ref": "#/entities/QuizResult" },
+      "description": "User quiz history and scores"
+    },
+    "/speakingSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/SpeakingSession" },
+      "description": "AI Tutor, simulator, and peer speaking sessions"
+    },
+    "/conversationTranscripts/{transcriptId}": {
+      "schema": { "$ref": "#/entities/ConversationTranscript" },
+      "description": "Consented conversation transcripts for speaking sessions"
+    },
+    "/tutorPreferences/{userId}": {
+      "schema": { "$ref": "#/entities/TutorPreference" },
+      "description": "Per-user AI Native Tutor preferences"
+    },
+    "/userConnections/{connectionId}": {
+      "schema": { "$ref": "#/entities/UserConnection" },
+      "description": "Peer invitations, acceptances, and blocks"
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/NotificationItem" },
+      "description": "User notifications"
+    },
+    "/achievements/{achievementId}": {
+      "schema": { "$ref": "#/entities/AchievementUnlock" },
+      "description": "Unlocked user achievements"
+    },
+    "/dailyChallenges/{challengeId}": {
+      "schema": { "$ref": "#/entities/DailyChallengeProgress" },
+      "description": "Daily challenge completion records"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/SafetyReport" },
+      "description": "User safety reports for moderation"
+    },
+    "/learningInsights/{insightId}": {
+      "schema": { "$ref": "#/entities/LearningInsight" },
+      "description": "Captured learner grammar and vocabulary insights across AI modules"
+    },
+    "/learnerMemories/{userId}": {
+      "schema": { "$ref": "#/entities/LearnerMemory" },
+      "description": "Per-user isolated compact AI memory and personalized learning cache"
+    }
+  }
+}

@@ -1,0 +1,598 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Global Hardened Primitives
+    // ---------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen;
+    }
+
+    function isOptionalString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    function isValidStringList(arr, maxItems) {
+      return arr is list && arr.size() <= maxItems && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= 160));
+    }
+
+    function isValidDailyConversations(arr) {
+      return arr is list && arr.size() <= 6 && (arr.size() == 0 || (arr[0] is map && arr[0].keys().hasOnly(['speaker', 'line', 'translationId'])));
+    }
+
+    // ---------------------------------------------------------
+    // Entity Validation Blueprints
+    // ---------------------------------------------------------
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'audioConsentGranted', 'blockedUserIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'audioConsentGranted', 'blockedUserIds', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && isNonEmptyString(data.email, 254)
+        && data.role == 'learner'
+        && data.audioConsentGranted is bool
+        && isValidStringList(data.blockedUserIds, 50)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'level', 'preferredAccent', 'dailyTargetMinutes', 'streakDays', 'xpPoints', 'onboardingCompleted', 'isOnline', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'level', 'learningGoals', 'preferredAccent', 'dailyTargetMinutes', 'streakDays', 'xpPoints', 'onboardingCompleted', 'isOnline', 'updatedAt'])
+        && data.uid == userId
+        && isNonEmptyString(data.displayName, 80)
+        && (!('photoURL' in data) || isOptionalString(data.photoURL, 512))
+        && data.level in ['A1-A2', 'B1-B2', 'C1-C2']
+        && (!('learningGoals' in data) || isOptionalString(data.learningGoals, 300))
+        && data.preferredAccent in ['American', 'British']
+        && data.dailyTargetMinutes is number && data.dailyTargetMinutes >= 5 && data.dailyTargetMinutes <= 240
+        && data.streakDays is number && data.streakDays >= 0 && data.streakDays <= 10000
+        && data.xpPoints is number && data.xpPoints >= 0 && data.xpPoints <= 10000000
+        && data.onboardingCompleted is bool
+        && data.isOnline is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVocabularyItem(data, vocabId) {
+      return data.keys().hasAll(['id', 'userId', 'word', 'meaningId', 'category', 'ipa', 'grammarExplanation', 'synonyms', 'antonyms', 'relatedWords', 'masteryStatus', 'reviewCount', 'errorCount', 'isFavorite', 'nextReviewAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'word', 'meaningId', 'category', 'ipa', 'grammarExplanation', 'synonyms', 'antonyms', 'relatedWords', 'commonUsage', 'collocations', 'phrasalVerbs', 'commonMistakes', 'dailyConversations', 'masteryStatus', 'reviewCount', 'errorCount', 'isFavorite', 'nextReviewAt', 'createdAt', 'updatedAt'])
+        && data.id == vocabId
+        && data.userId == request.auth.uid
+        && isNonEmptyString(data.word, 80)
+        && isNonEmptyString(data.meaningId, 200)
+        && data.category in ['noun', 'verb', 'adjective', 'adverb', 'preposition', 'phrase', 'other']
+        && isOptionalString(data.ipa, 100)
+        && isOptionalString(data.grammarExplanation, 1500)
+        && isValidStringList(data.synonyms, 12)
+        && isValidStringList(data.antonyms, 12)
+        && isValidStringList(data.relatedWords, 12)
+        && (!('commonUsage' in data) || isOptionalString(data.commonUsage, 600))
+        && (!('collocations' in data) || isValidStringList(data.collocations, 12))
+        && (!('phrasalVerbs' in data) || isValidStringList(data.phrasalVerbs, 12))
+        && (!('commonMistakes' in data) || isValidStringList(data.commonMistakes, 10))
+        && (!('dailyConversations' in data) || isValidDailyConversations(data.dailyConversations))
+        && data.masteryStatus in ['New', 'Learning', 'Familiar', 'Mastered']
+        && data.reviewCount is number && data.reviewCount >= 0 && data.reviewCount <= 10000
+        && data.errorCount is number && data.errorCount >= 0 && data.errorCount <= 10000
+        && data.isFavorite is bool
+        && data.nextReviewAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVocabularySentence(data, sentenceId) {
+      return data.keys().hasAll(['id', 'userId', 'vocabId', 'tense', 'sentence', 'translationId', 'formula', 'subject', 'verb', 'objectComplement', 'structureReason', 'dailyUsage', 'affirmative', 'negative', 'interrogative', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'vocabId', 'tense', 'sentence', 'translationId', 'formula', 'subject', 'verb', 'objectComplement', 'structureReason', 'dailyUsage', 'affirmative', 'negative', 'interrogative', 'createdAt'])
+        && data.id == sentenceId
+        && data.userId == request.auth.uid
+        && isValidId(data.vocabId)
+        && isNonEmptyString(data.tense, 80)
+        && isNonEmptyString(data.sentence, 300)
+        && isNonEmptyString(data.translationId, 300)
+        && isNonEmptyString(data.formula, 160)
+        && isOptionalString(data.subject, 80)
+        && isOptionalString(data.verb, 80)
+        && isOptionalString(data.objectComplement, 160)
+        && isOptionalString(data.structureReason, 400)
+        && isOptionalString(data.dailyUsage, 400)
+        && isOptionalString(data.affirmative, 300)
+        && isOptionalString(data.negative, 300)
+        && isOptionalString(data.interrogative, 300)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidGrammarLessonProgress(data, lessonId) {
+      return data.keys().hasAll(['id', 'userId', 'topicId', 'category', 'completed', 'quizScore', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'topicId', 'category', 'completed', 'quizScore', 'updatedAt'])
+        && data.id == lessonId
+        && data.userId == request.auth.uid
+        && isNonEmptyString(data.topicId, 80)
+        && data.category in ['Basic Grammar', 'Tenses', 'Advanced Grammar']
+        && data.completed is bool
+        && data.quizScore is number && data.quizScore >= 0 && data.quizScore <= 100
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLearningProgress(data, userId) {
+      return data.keys().hasAll(['userId', 'vocabTotal', 'vocabMastered', 'grammarCompleted', 'speakingMinutes', 'lastModule', 'lastLessonTitle', 'weeklyMinutes', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'vocabTotal', 'vocabMastered', 'grammarCompleted', 'speakingMinutes', 'lastModule', 'lastLessonTitle', 'weeklyMinutes', 'updatedAt'])
+        && data.userId == userId
+        && data.vocabTotal is number && data.vocabTotal >= 0 && data.vocabTotal <= 100000
+        && data.vocabMastered is number && data.vocabMastered >= 0 && data.vocabMastered <= 100000
+        && data.grammarCompleted is number && data.grammarCompleted >= 0 && data.grammarCompleted <= 500
+        && data.speakingMinutes is number && data.speakingMinutes >= 0 && data.speakingMinutes <= 1000000
+        && isOptionalString(data.lastModule, 80)
+        && isOptionalString(data.lastLessonTitle, 160)
+        && data.weeklyMinutes is list && data.weeklyMinutes.size() == 7 && data.weeklyMinutes[0] is number
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuizResult(data, resultId) {
+      return data.keys().hasAll(['id', 'userId', 'quizType', 'topic', 'score', 'totalQuestions', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'quizType', 'topic', 'score', 'totalQuestions', 'createdAt'])
+        && data.id == resultId
+        && data.userId == request.auth.uid
+        && data.quizType in ['vocabulary', 'grammar', 'listening', 'placement', 'sentence-builder']
+        && isNonEmptyString(data.topic, 120)
+        && data.score is number && data.score >= 0 && data.score <= 100
+        && data.totalQuestions is number && data.totalQuestions >= 1 && data.totalQuestions <= 100
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSpeakingSession(data, sessionId) {
+      return data.keys().hasAll(['id', 'hostId', 'participantIds', 'sessionType', 'topic', 'durationSeconds', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'hostId', 'peerId', 'participantIds', 'sessionType', 'topic', 'tutorId', 'durationSeconds', 'rating', 'status', 'summaryText', 'createdAt', 'updatedAt'])
+        && data.id == sessionId
+        && isValidId(data.hostId)
+        && (!('peerId' in data) || isOptionalString(data.peerId, 128))
+        && data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 2
+        && data.participantIds[0] is string && data.participantIds[0].size() <= 128
+        && request.auth.uid in data.participantIds
+        && data.sessionType in ['ai-tutor', 'community', 'simulator']
+        && isNonEmptyString(data.topic, 120)
+        && (!('tutorId' in data) || isOptionalString(data.tutorId, 64))
+        && data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 86400
+        && (!('rating' in data) || (data.rating is number && data.rating >= 1 && data.rating <= 5))
+        && data.status in ['active', 'completed']
+        && (!('summaryText' in data) || isOptionalString(data.summaryText, 2000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidConversationTranscript(data, transcriptId) {
+      return data.keys().hasAll(['id', 'sessionId', 'ownerId', 'participantIds', 'entries', 'consentGranted', 'createdAt'])
+        && data.keys().hasOnly(['id', 'sessionId', 'ownerId', 'participantIds', 'entries', 'consentGranted', 'createdAt'])
+        && data.id == transcriptId
+        && isValidId(data.sessionId)
+        && data.ownerId == request.auth.uid
+        && data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 2
+        && data.participantIds[0] is string && data.participantIds[0].size() <= 128
+        && request.auth.uid in data.participantIds
+        && data.entries is list && data.entries.size() <= 200
+        && data.consentGranted == true
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTutorPreference(data, userId) {
+      return data.keys().hasAll(['userId', 'selectedTutorId', 'preferredMode', 'showTranslations', 'speakingSpeed', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'selectedTutorId', 'preferredMode', 'showTranslations', 'speakingSpeed', 'updatedAt'])
+        && data.userId == userId
+        && isNonEmptyString(data.selectedTutorId, 64)
+        && isNonEmptyString(data.preferredMode, 64)
+        && data.showTranslations is bool
+        && data.speakingSpeed in ['slow', 'normal', 'natural']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserConnection(data, connectionId) {
+      return data.keys().hasAll(['id', 'requesterId', 'targetId', 'participantIds', 'status', 'topic', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'requesterId', 'targetId', 'participantIds', 'status', 'topic', 'createdAt', 'updatedAt'])
+        && data.id == connectionId
+        && isValidId(data.requesterId)
+        && isValidId(data.targetId)
+        && data.requesterId != data.targetId
+        && data.participantIds is list && data.participantIds.size() == 2
+        && data.participantIds[0] is string && data.participantIds[1] is string
+        && request.auth.uid in data.participantIds
+        && data.status in ['invited', 'accepted', 'rejected', 'blocked']
+        && isNonEmptyString(data.topic, 120)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data, notificationId) {
+      return data.keys().hasAll(['id', 'userId', 'type', 'title', 'body', 'read', 'actionRoute', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'type', 'title', 'body', 'read', 'actionRoute', 'createdAt'])
+        && data.id == notificationId
+        && data.userId == request.auth.uid
+        && data.type in ['reminder', 'review', 'invite', 'invite_accepted', 'achievement', 'challenge', 'milestone']
+        && isNonEmptyString(data.title, 120)
+        && isNonEmptyString(data.body, 400)
+        && data.read is bool
+        && isOptionalString(data.actionRoute, 80)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAchievement(data, achievementId) {
+      return data.keys().hasAll(['id', 'userId', 'badgeKey', 'title', 'description', 'unlockedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'badgeKey', 'title', 'description', 'unlockedAt'])
+        && data.id == achievementId
+        && data.userId == request.auth.uid
+        && isNonEmptyString(data.badgeKey, 64)
+        && isNonEmptyString(data.title, 100)
+        && isOptionalString(data.description, 240)
+        && data.unlockedAt is timestamp;
+    }
+
+    function isValidDailyChallenge(data, challengeId) {
+      return data.keys().hasAll(['id', 'userId', 'dateKey', 'title', 'completed', 'xpAwarded', 'completedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'dateKey', 'title', 'completed', 'xpAwarded', 'completedAt'])
+        && data.id == challengeId
+        && data.userId == request.auth.uid
+        && isNonEmptyString(data.dateKey, 20)
+        && isNonEmptyString(data.title, 120)
+        && data.completed is bool
+        && data.xpAwarded is number && data.xpAwarded >= 0 && data.xpAwarded <= 500
+        && data.completedAt is timestamp;
+    }
+
+    function isValidSafetyReport(data, reportId) {
+      return data.keys().hasAll(['id', 'reporterId', 'reportedUserId', 'reason', 'createdAt'])
+        && data.keys().hasOnly(['id', 'reporterId', 'reportedUserId', 'reason', 'createdAt'])
+        && data.id == reportId
+        && data.reporterId == request.auth.uid
+        && isValidId(data.reportedUserId)
+        && data.reporterId != data.reportedUserId
+        && isNonEmptyString(data.reason, 500)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLearningInsight(data, insightId) {
+      return data.keys().hasAll(['id', 'userId', 'sourceModule', 'mistakeOriginal', 'correction', 'explanation', 'grammarTopicId', 'vocabWord', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'sourceModule', 'mistakeOriginal', 'correction', 'explanation', 'grammarTopicId', 'vocabWord', 'createdAt'])
+        && data.id == insightId
+        && data.userId == request.auth.uid
+        && data.sourceModule in ['ai-tutor', 'speaking-community', 'sentence-builder', 'grammar-analyzer', 'simulator']
+        && isOptionalString(data.mistakeOriginal, 300)
+        && isOptionalString(data.correction, 300)
+        && isOptionalString(data.explanation, 600)
+        && isNonEmptyString(data.grammarTopicId, 80)
+        && isOptionalString(data.vocabWord, 80)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLearnerMemory(data, userId) {
+      return data.keys().hasAll(['userId', 'grammarWeaknesses', 'weakVocabWords', 'recentSessionSummaries', 'pronunciationSamplesCount', 'pronunciationAvgMatch', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'grammarWeaknesses', 'weakVocabWords', 'recentSessionSummaries', 'pronunciationSamplesCount', 'pronunciationAvgMatch', 'personalizedPathJson', 'lastEvaluationJson', 'dailyChallengeJson', 'updatedAt'])
+        && data.userId == userId
+        && isValidStringList(data.grammarWeaknesses, 20)
+        && isValidStringList(data.weakVocabWords, 25)
+        && isValidStringList(data.recentSessionSummaries, 12)
+        && data.pronunciationSamplesCount is number && data.pronunciationSamplesCount >= 0 && data.pronunciationSamplesCount <= 100000
+        && data.pronunciationAvgMatch is number && data.pronunciationAvgMatch >= 0 && data.pronunciationAvgMatch <= 100
+        && (!('personalizedPathJson' in data) || isOptionalString(data.personalizedPathJson, 8000))
+        && (!('lastEvaluationJson' in data) || isOptionalString(data.lastEvaluationJson, 8000))
+        && (!('dailyChallengeJson' in data) || isOptionalString(data.dailyChallengeJson, 4000))
+        && data.updatedAt is timestamp;
+    }
+
+    // ---------------------------------------------------------
+    // Collection Rules
+    // ---------------------------------------------------------
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().role == existing().role
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['audioConsentGranted', 'blockedUserIds', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /userProfiles/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (isOwner(userId) || resource.data.isOnline == true);
+      allow list: if isSignedIn() && resource.data.isOnline == true;
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'level', 'learningGoals', 'preferredAccent',
+          'dailyTargetMinutes', 'streakDays', 'xpPoints', 'onboardingCompleted',
+          'isOnline', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /vocabulary/{vocabId} {
+      allow get: if isValidId(vocabId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(vocabId)
+        && isVerifiedUser()
+        && isValidVocabularyItem(incoming(), vocabId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(vocabId)
+        && isVerifiedUser()
+        && resource.data.userId == request.auth.uid
+        && isValidVocabularyItem(incoming(), vocabId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'word', 'meaningId', 'category', 'ipa', 'grammarExplanation', 'synonyms', 'antonyms', 'relatedWords',
+          'commonUsage', 'collocations', 'phrasalVerbs', 'commonMistakes', 'dailyConversations',
+          'masteryStatus', 'reviewCount', 'errorCount', 'isFavorite', 'nextReviewAt', 'updatedAt'
+        ]);
+      allow delete: if isValidId(vocabId) && isVerifiedUser() && resource.data.userId == request.auth.uid;
+    }
+
+    match /vocabularySentences/{sentenceId} {
+      allow get: if isValidId(sentenceId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(sentenceId)
+        && isVerifiedUser()
+        && isValidVocabularySentence(incoming(), sentenceId)
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/vocabulary/$(incoming().vocabId))
+        && get(/databases/$(database)/documents/vocabulary/$(incoming().vocabId)).data.userId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isValidId(sentenceId) && isVerifiedUser() && resource.data.userId == request.auth.uid;
+    }
+
+    match /grammarLessons/{lessonId} {
+      allow get: if isValidId(lessonId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(lessonId)
+        && isVerifiedUser()
+        && isValidGrammarLessonProgress(incoming(), lessonId)
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(lessonId)
+        && isVerifiedUser()
+        && resource.data.userId == request.auth.uid
+        && isValidGrammarLessonProgress(incoming(), lessonId)
+        && incoming().userId == existing().userId
+        && incoming().topicId == existing().topicId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['completed', 'quizScore', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /learningProgress/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidLearningProgress(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidLearningProgress(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'vocabTotal', 'vocabMastered', 'grammarCompleted', 'speakingMinutes',
+          'lastModule', 'lastLessonTitle', 'weeklyMinutes', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /quizResults/{resultId} {
+      allow get: if isValidId(resultId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(resultId)
+        && isVerifiedUser()
+        && isValidQuizResult(incoming(), resultId)
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /speakingSessions/{sessionId} {
+      allow get: if isValidId(sessionId) && isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if isValidId(sessionId)
+        && isVerifiedUser()
+        && isValidSpeakingSession(incoming(), sessionId)
+        && incoming().hostId == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(sessionId)
+        && isVerifiedUser()
+        && request.auth.uid in resource.data.participantIds
+        && existing().status == 'active'
+        && isValidSpeakingSession(incoming(), sessionId)
+        && incoming().hostId == existing().hostId
+        && incoming().participantIds == existing().participantIds
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['durationSeconds', 'rating', 'status', 'summaryText', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /conversationTranscripts/{transcriptId} {
+      allow get: if isValidId(transcriptId) && isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if isValidId(transcriptId)
+        && isVerifiedUser()
+        && isValidConversationTranscript(incoming(), transcriptId)
+        && exists(/databases/$(database)/documents/speakingSessions/$(incoming().sessionId))
+        && request.auth.uid in get(/databases/$(database)/documents/speakingSessions/$(incoming().sessionId)).data.participantIds
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /tutorPreferences/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidTutorPreference(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidTutorPreference(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['selectedTutorId', 'preferredMode', 'showTranslations', 'speakingSpeed', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /userConnections/{connectionId} {
+      allow get: if isValidId(connectionId) && isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow list: if isSignedIn() && request.auth.uid in resource.data.participantIds;
+      allow create: if isValidId(connectionId)
+        && isVerifiedUser()
+        && isValidUserConnection(incoming(), connectionId)
+        && incoming().requesterId == request.auth.uid
+        && incoming().status == 'invited'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(connectionId)
+        && isVerifiedUser()
+        && request.auth.uid in resource.data.participantIds
+        && existing().status in ['invited', 'accepted']
+        && isValidUserConnection(incoming(), connectionId)
+        && incoming().requesterId == existing().requesterId
+        && incoming().targetId == existing().targetId
+        && incoming().participantIds == existing().participantIds
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(notificationId)
+        && isVerifiedUser()
+        && isValidNotification(incoming(), notificationId)
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(notificationId)
+        && isVerifiedUser()
+        && resource.data.userId == request.auth.uid
+        && isValidNotification(incoming(), notificationId)
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read']);
+      allow delete: if isValidId(notificationId) && isVerifiedUser() && resource.data.userId == request.auth.uid;
+    }
+
+    match /achievements/{achievementId} {
+      allow get: if isValidId(achievementId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(achievementId)
+        && isVerifiedUser()
+        && isValidAchievement(incoming(), achievementId)
+        && incoming().unlockedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /dailyChallenges/{challengeId} {
+      allow get: if isValidId(challengeId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(challengeId)
+        && isVerifiedUser()
+        && isValidDailyChallenge(incoming(), challengeId)
+        && incoming().completedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && isSignedIn() && resource.data.reporterId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.reporterId == request.auth.uid;
+      allow create: if isValidId(reportId)
+        && isVerifiedUser()
+        && isValidSafetyReport(incoming(), reportId)
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /learningInsights/{insightId} {
+      allow get: if isValidId(insightId) && isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(insightId)
+        && isVerifiedUser()
+        && isValidLearningInsight(incoming(), insightId)
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(insightId) && isVerifiedUser() && resource.data.userId == request.auth.uid;
+    }
+
+    match /learnerMemories/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidLearnerMemory(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isOwner(userId)
+        && isValidLearnerMemory(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'grammarWeaknesses', 'weakVocabWords', 'recentSessionSummaries',
+          'pronunciationSamplesCount', 'pronunciationAvgMatch',
+          'personalizedPathJson', 'lastEvaluationJson', 'dailyChallengeJson', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+  }
+}
