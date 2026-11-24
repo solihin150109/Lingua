@@ -60,10 +60,10 @@ export function AuthView() {
 
             <div className="space-y-3 pt-4">
               <h1 className="text-2xl sm:text-3xl font-semibold leading-snug text-balance">
-                Structured English mastery, from active vocabulary to confident conversation.
+                English komunikasi waiter hotel &amp; restoran yang sopan dan percaya diri.
               </h1>
               <p className="text-slate-300 text-sm leading-relaxed max-w-md">
-                Build a personal lexicon with instant tense patterns and grammar formulas, then practice speaking with AI native tutors and peer learners.
+                Kuasai kosakata layanan tamu, 7 grammar dasar, 150+ latihan per modul yang dirotasi setiap login, dan dialog script Waiter–Tamu.
               </p>
             </div>
           </div>
@@ -71,18 +71,18 @@ export function AuthView() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-8 border-t border-white/15 text-xs">
             <div className="space-y-1.5">
               <BookOpen className="w-4 h-4 text-[#D6AD60]" />
-              <div className="font-semibold">Smart Lexicon</div>
-              <div className="text-slate-300 leading-relaxed">7-tense structure breakdowns</div>
+              <div className="font-semibold">Kosakata &amp; 7 Grammar</div>
+              <div className="text-slate-300 leading-relaxed">Rumus &amp; kalimat layanan tamu</div>
             </div>
             <div className="space-y-1.5">
               <Mic className="w-4 h-4 text-[#66B2AF]" />
-              <div className="font-semibold">AI Voice Tutor</div>
-              <div className="text-slate-300 leading-relaxed">US &amp; UK spoken practice</div>
+              <div className="font-semibold">150+ Bank Soal Waiter</div>
+              <div className="text-slate-300 leading-relaxed">Listening, Dictation &amp; Shadowing</div>
             </div>
             <div className="space-y-1.5">
               <Globe2 className="w-4 h-4 text-[#66B2AF]" />
               <div className="font-semibold">Speaking Partner</div>
-              <div className="text-slate-300 leading-relaxed">WebRTC calls &amp; live captions</div>
+              <div className="text-slate-300 leading-relaxed">Call partner + script Waiter-Tamu</div>
             </div>
           </div>
         </div>
@@ -285,7 +285,7 @@ export function OnboardingView() {
   );
   const [dailyTarget, setDailyTarget] = useState(profile?.dailyTargetMinutes || 20);
   const [goals, setGoals] = useState(
-    profile?.learningGoals || 'Speak fluently at work and expand daily English vocabulary.'
+    profile?.learningGoals || 'Berkomunikasi sopan dan lancar sebagai waiter di hotel & restoran.'
   );
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);

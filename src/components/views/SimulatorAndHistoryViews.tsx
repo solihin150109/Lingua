@@ -21,8 +21,8 @@ function ConversationPracticeHeader({ activeTab }: { activeTab: 'simulator' | 's
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Conversation Practice"
-        subtitle="Roleplay realistic everyday and workplace situations, receive readiness evaluations, and analyze past speaking sessions."
+        title="Roleplay Waiter Hotel & Restoran"
+        subtitle="Simulasi melayani tamu hotel/restoran dan tinjau riwayat percakapan Anda."
       />
       <div className="flex items-center gap-1.5 border-b border-[#E4E8EE] dark:border-[#263344] pb-2">
         <button
@@ -35,7 +35,7 @@ function ConversationPracticeHeader({ activeTab }: { activeTab: 'simulator' | 's
           }`}
         >
           <MessageSquare className="w-3.5 h-3.5" />
-          <span>Roleplay Scenarios</span>
+          <span>Roleplay Waiter</span>
         </button>
         <button
           type="button"
@@ -47,7 +47,7 @@ function ConversationPracticeHeader({ activeTab }: { activeTab: 'simulator' | 's
           }`}
         >
           <History className="w-3.5 h-3.5" />
-          <span>Speaking History</span>
+          <span>Riwayat Speaking</span>
         </button>
       </div>
     </div>
@@ -79,12 +79,14 @@ export function ConversationSimulatorView() {
     readinessScore: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastFailedInput, setLastFailedInput] = useState<string | null>(null);
 
   const handleSelectScenario = (id: string) => {
     const next = SIMULATOR_SCENARIOS.find((s) => s.id === id) || SIMULATOR_SCENARIOS[0];
     setSelectedId(id);
     setEvaluation(null);
     setError(null);
+    setLastFailedInput(null);
     setMessages([
       {
         id: `sim-${id}-0`,
@@ -95,12 +97,13 @@ export function ConversationSimulatorView() {
     ]);
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = input.trim();
-    if (!clean) return;
-    setInput('');
+  const sendMessageText = async (clean: string, isRetry = false) => {
+    if (!clean || sending) return;
     setError(null);
+    setLastFailedInput(null);
+    if (!isRetry) {
+      setInput('');
+    }
 
     const userMsg: TranscriptEntry = {
       id: `u-${Date.now()}`,
@@ -108,8 +111,10 @@ export function ConversationSimulatorView() {
       text: clean,
       timestamp: new Date().toISOString(),
     };
-    const nextHistory = [...messages, userMsg];
-    setMessages(nextHistory);
+    const nextHistory = isRetry ? messages : [...messages, userMsg];
+    if (!isRetry) {
+      setMessages(nextHistory);
+    }
     setSending(true);
 
     try {
@@ -140,10 +145,18 @@ export function ConversationSimulatorView() {
       setMessages((prev) => [...prev, aiMsg]);
       speakText(data.reply);
     } catch (err) {
+      setLastFailedInput(clean);
       setError(err instanceof Error ? err.message : 'Unable to continue simulation.');
     } finally {
       setSending(false);
     }
+  };
+
+  const handleSend = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = input.trim();
+    if (!clean) return;
+    await sendMessageText(clean);
   };
 
   const handleFinishAndEvaluate = async () => {
@@ -226,8 +239,18 @@ export function ConversationSimulatorView() {
             </div>
 
             {error && (
-              <div className="mt-2 p-2.5 rounded-lg bg-[#FDF2F2] dark:bg-[#D65A5A]/15 text-xs text-[#9E3535] dark:text-rose-200">
-                {error}
+              <div className="mt-2 p-2.5 rounded-lg bg-[#FDF2F2] dark:bg-[#D65A5A]/15 flex flex-wrap items-center justify-between gap-2 text-xs text-[#9E3535] dark:text-rose-200">
+                <span>{error}</span>
+                {lastFailedInput && (
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => void sendMessageText(lastFailedInput, true)}
+                    className="px-2.5 py-1 rounded bg-[#243B53] text-white font-semibold shrink-0"
+                  >
+                    Coba Lagi
+                  </button>
+                )}
               </div>
             )}
 
@@ -320,6 +343,24 @@ export function ConversationSimulatorView() {
                   </ul>
                 </div>
               </div>
+              {evaluation.suggestedExpressions && evaluation.suggestedExpressions.length > 0 && (
+                <div className="pt-2 border-t border-[#E4E8EE] dark:border-[#263344] space-y-1.5 text-xs">
+                  <div className="font-semibold text-[#3C8D8A]">Useful Expressions for Next Time</div>
+                  <div className="flex flex-wrap gap-2">
+                    {evaluation.suggestedExpressions.map((exp) => (
+                      <button
+                        key={exp}
+                        type="button"
+                        onClick={() => speakText(exp)}
+                        className="px-2.5 py-1.5 rounded-lg bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] hover:border-[#3C8D8A] text-left text-[#243447] dark:text-slate-200 flex items-center gap-1.5 transition-colors"
+                      >
+                        <Volume2 className="w-3.5 h-3.5 text-[#3C8D8A] shrink-0" />
+                        <span>{exp}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -359,7 +400,9 @@ export function SpeakingHistoryView() {
         }),
       });
       const data: SpeakingSummaryReport = await res.json();
-      if (!res.ok) throw new Error('Analysis failed.');
+      if (!res.ok) {
+        throw new Error((data as unknown as { error?: string }).error || 'Analysis failed.');
+      }
       setReportsBySession((prev) => ({ ...prev, [session.id]: data }));
     } catch (err) {
       showToast(
@@ -379,15 +422,15 @@ export function SpeakingHistoryView() {
       {speakingSessions.length === 0 ? (
         <EmptyState
           icon={<History className="w-5 h-5" />}
-          title="No speaking sessions recorded yet"
-          description="Start a voice session with an AI Tutor, Speaking Partner, or Roleplay Scenario to review and analyze your conversation history here."
+          title="Belum ada riwayat speaking"
+          description="Mulai sesi di Speaking Partner (Script) atau Roleplay Waiter untuk melihat riwayat latihan Anda di sini."
           action={
             <button
               type="button"
-              onClick={() => setActiveRoute('ai-tutor')}
+              onClick={() => setActiveRoute('speaking-community')}
               className="px-4 py-2 rounded-lg bg-[#243B53] hover:bg-[#1B2D40] text-white text-xs font-semibold"
             >
-              Open AI Tutor
+              Buka Speaking Partner
             </button>
           }
         />
@@ -483,9 +526,7 @@ export function SpeakingHistoryView() {
                         type="button"
                         onClick={() =>
                           setActiveRoute(
-                            session.sessionType === 'ai-tutor'
-                              ? 'ai-tutor'
-                              : session.sessionType === 'community'
+                            session.sessionType === 'community'
                               ? 'speaking-community'
                               : 'simulator'
                           )

@@ -334,7 +334,17 @@ export function SettingsView() {
             <span className="font-semibold text-[#39856A]">Provisioned</span>
           </div>
           <div className="flex justify-between py-1.5 border-b border-[#E4E8EE] dark:border-[#263344]">
-            <span>Server-Side Gemini AI Engine</span>
+            <span>Server-Side Groq High-Speed AI Engine (Primary)</span>
+            <span
+              className={`font-semibold ${
+                serverHealth?.groqConfigured ? 'text-[#39856A]' : 'text-[#D69E36]'
+              }`}
+            >
+              {serverHealth?.groqConfigured ? 'Active (Llama 3.3 / Whisper)' : 'Set GROQ_API_KEY in Secrets'}
+            </span>
+          </div>
+          <div className="flex justify-between py-1.5 border-b border-[#E4E8EE] dark:border-[#263344]">
+            <span>Server-Side Gemini AI Engine (Fallback &amp; Live Voice)</span>
             <span
               className={`font-semibold ${
                 serverHealth?.geminiConfigured ? 'text-[#39856A]' : 'text-[#D69E36]'
@@ -344,7 +354,7 @@ export function SettingsView() {
             </span>
           </div>
           <div className="flex justify-between py-1.5">
-            <span>WebRTC Signaling &amp; Gemini Live WebSocket</span>
+            <span>WebRTC Signaling &amp; Live Voice WebSocket</span>
             <span
               className={`font-semibold ${
                 serverHealth?.webrtcSignaling ? 'text-[#39856A]' : 'text-[#718096]'
@@ -355,7 +365,7 @@ export function SettingsView() {
           </div>
         </div>
         <p className="text-[#718096] pt-1">
-          Google Sign-In works immediately. Enable Email/Password in Firebase Console &gt; Authentication &gt; Sign-in method if you also want email password login.
+          Google Sign-In works immediately. Configure GROQ_API_KEY in Settings &gt; Secrets for ultra-fast AI responses, and enable Email/Password in Firebase Console if needed.
         </p>
       </div>
     </div>

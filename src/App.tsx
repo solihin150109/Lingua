@@ -2,26 +2,21 @@ import React from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LayoutShell } from './components/LayoutShell';
 import { ToastProvider } from './components/ui/ToastAndPrimitives';
-import { AiNativeTutorView } from './components/views/AiNativeTutorView';
 import { AuthView, OnboardingView } from './components/views/AuthAndOnboardingView';
 import { DashboardView } from './components/views/DashboardView';
 import { GrammarCenterView } from './components/views/GrammarCenterView';
-import {
-  DailyChallengeView,
-  LearningPathView,
-} from './components/views/LearningPathAndChallengeViews';
 import {
   ListeningPracticeView,
   PronunciationView,
 } from './components/views/ListeningAndPronunciationViews';
 import { ProfileView, SettingsView } from './components/views/ProfileAndSettingsViews';
-import { AchievementsView, AnalyticsView } from './components/views/ProgressViews';
 import { SentenceBuilderView } from './components/views/SentenceBuilderView';
 import {
   ConversationSimulatorView,
   SpeakingHistoryView,
 } from './components/views/SimulatorAndHistoryViews';
 import { SpeakingCommunityView } from './components/views/SpeakingCommunityView';
+import { StudyScheduleView } from './components/views/StudyScheduleView';
 import { VocabularyReviewView } from './components/views/VocabularyReviewView';
 import { VocabularyView } from './components/views/VocabularyView';
 import { LinguaProvider, useLingua } from './context/LinguaContext';
@@ -61,10 +56,6 @@ function LinguaRouter() {
     switch (activeRoute) {
       case 'dashboard':
         return <DashboardView />;
-      case 'learning-path':
-        return <LearningPathView />;
-      case 'daily-challenge':
-        return <DailyChallengeView />;
       case 'vocabulary':
         return <VocabularyView />;
       case 'grammar':
@@ -75,20 +66,16 @@ function LinguaRouter() {
         return <ListeningPracticeView />;
       case 'pronunciation':
         return <PronunciationView />;
-      case 'ai-tutor':
-        return <AiNativeTutorView />;
       case 'speaking-community':
         return <SpeakingCommunityView />;
       case 'simulator':
         return <ConversationSimulatorView />;
       case 'speaking-history':
         return <SpeakingHistoryView />;
-      case 'achievements':
-        return <AchievementsView />;
-      case 'analytics':
-        return <AnalyticsView />;
       case 'review-vocabulary':
         return <VocabularyReviewView />;
+      case 'schedule':
+        return <StudyScheduleView />;
       case 'profile':
         return <ProfileView />;
       case 'settings':

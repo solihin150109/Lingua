@@ -95,11 +95,24 @@ export function VocabularyReviewView() {
               </div>
             </div>
             {currentSentences[0] && (
-              <div className="p-3.5 rounded-lg bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] text-sm space-y-1">
-                <div className="font-medium text-[#243447] dark:text-white">
-                  {currentSentences[0].sentence}
+              <div className="p-3.5 rounded-lg bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] text-sm flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold text-[#3C8D8A]">
+                    {currentSentences[0].tense}
+                  </div>
+                  <div className="font-medium text-[#243447] dark:text-white">
+                    {currentSentences[0].sentence}
+                  </div>
+                  <div className="text-xs text-[#718096]">{currentSentences[0].translationId}</div>
                 </div>
-                <div className="text-xs text-[#718096]">{currentSentences[0].translationId}</div>
+                <button
+                  type="button"
+                  onClick={() => speakText(currentSentences[0].sentence)}
+                  aria-label="Listen to example sentence"
+                  className="p-1.5 rounded-md text-[#3C8D8A] shrink-0"
+                >
+                  <Volume2 className="w-4 h-4" />
+                </button>
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">

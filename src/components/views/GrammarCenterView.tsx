@@ -2,36 +2,42 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   BookmarkPlus,
-  CheckCircle2,
   Layers,
   Loader2,
+  PenTool,
+  Shuffle,
   Sparkles,
   Volume2,
 } from 'lucide-react';
 import { useLingua } from '../../context/LinguaContext';
-import { GRAMMAR_TOPICS } from '../../lib/curriculum';
+import { BASIC_GRAMMAR_STRUCTURES, GRAMMAR_TOPICS } from '../../lib/curriculum';
+import {
+  GRAMMAR_BANK_150,
+  SESSION_QUESTION_COUNT,
+  TOTAL_BANK_SIZE,
+  getSessionSlice,
+} from '../../lib/hospitalityBanks';
 import type {
   GrammarAnalysisResult,
-  GrammarTopic,
   GrammarTransformResult,
 } from '../../types/lingua';
 import { PageHeader, useToast } from '../ui/ToastAndPrimitives';
 
 const TRANSFORM_TENSES = [
   'Simple Present',
+  'Present Continuous',
   'Simple Past',
-  'Present Perfect',
-  'Past Continuous',
   'Simple Future',
-  'Passive Voice',
+  'Present Perfect',
+  'Modal Verbs',
+  'Imperatives',
 ];
+
+const BASIC_GRAMMAR_IDS = new Set(BASIC_GRAMMAR_STRUCTURES.map((g) => g.id));
 
 export function GrammarCenterView() {
   const {
     profile,
-    grammarProgress,
-    completeGrammarLesson,
-    recordQuizResult,
     recordLearningInsight,
     learnerContext,
     focusedGrammarTopicId,
@@ -40,30 +46,39 @@ export function GrammarCenterView() {
     vocabulary,
     speakText,
     globalSearch,
+    navigateToSentenceBuilder,
+    quizSessionSeed,
+    rotateQuizSessionSeed,
   } = useLingua();
   const { showToast } = useToast();
 
-  const [viewMode, setViewMode] = useState<'lessons' | 'analyzer'>('lessons');
-  const [categoryFilter, setCategoryFilter] = useState<'All' | GrammarTopic['category']>('All');
+  const [viewMode, setViewMode] = useState<'basic' | 'quiz' | 'analyzer'>('basic');
+  const [showAllReferenceTopics, setShowAllReferenceTopics] = useState(false);
   const [selectedTopicId, setSelectedTopicId] = useState<string>(
-    focusedGrammarTopicId || GRAMMAR_TOPICS[0].id
+    focusedGrammarTopicId || BASIC_GRAMMAR_STRUCTURES[0].id
   );
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [bankFilterId, setBankFilterId] = useState<string>('all');
+  const [bankAnswers, setBankAnswers] = useState<Record<string, number>>({});
+  const [bankPage, setBankPage] = useState(0);
 
   // AI Grammar Analyzer state
   const [sentenceInput, setSentenceInput] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<GrammarAnalysisResult | null>(null);
   const [analyzerError, setAnalyzerError] = useState<string | null>(null);
-  const [targetTense, setTargetTense] = useState('Present Perfect');
+  const [targetTense, setTargetTense] = useState('Modal Verbs');
   const [transforming, setTransforming] = useState<string | null>(null);
   const [transformResult, setTransformResult] = useState<GrammarTransformResult | null>(null);
 
   useEffect(() => {
     if (focusedGrammarTopicId) {
       setSelectedTopicId(focusedGrammarTopicId);
-      setViewMode('lessons');
+      if (!BASIC_GRAMMAR_IDS.has(focusedGrammarTopicId)) {
+        setShowAllReferenceTopics(true);
+      }
+      setViewMode('basic');
       setQuizAnswers({});
       setQuizSubmitted(false);
       setFocusedGrammarTopicId(null);
@@ -72,42 +87,91 @@ export function GrammarCenterView() {
 
   const filteredTopics = useMemo(() => {
     const q = globalSearch.trim().toLowerCase();
-    return GRAMMAR_TOPICS.filter((t) => {
-      if (categoryFilter !== 'All' && t.category !== categoryFilter) return false;
+    const pool = showAllReferenceTopics
+      ? GRAMMAR_TOPICS
+      : GRAMMAR_TOPICS.filter((t) => BASIC_GRAMMAR_IDS.has(t.id));
+
+    return pool.filter((t) => {
       if (q && !t.title.toLowerCase().includes(q) && !t.summary.toLowerCase().includes(q)) {
         return false;
       }
       return true;
     });
-  }, [categoryFilter, globalSearch]);
+  }, [globalSearch, showAllReferenceTopics]);
 
   const activeTopic =
-    GRAMMAR_TOPICS.find((t) => t.id === selectedTopicId) || filteredTopics[0] || GRAMMAR_TOPICS[0];
-  const topicStatus = grammarProgress.find((g) => g.topicId === activeTopic.id);
+    GRAMMAR_TOPICS.find((t) => t.id === selectedTopicId) ||
+    filteredTopics[0] ||
+    GRAMMAR_TOPICS.find((t) => t.id === BASIC_GRAMMAR_STRUCTURES[0].id) ||
+    GRAMMAR_TOPICS[0];
+
+  const activeBasicMeta = BASIC_GRAMMAR_STRUCTURES.find((g) => g.id === activeTopic.id);
+
+  // Match sentences from user's vocabulary that belong to this grammar
+  const vocabById = useMemo(() => {
+    const map = new Map<string, string>();
+    vocabulary.forEach((v) => map.set(v.id, v.word));
+    return map;
+  }, [vocabulary]);
 
   const matchingUserSentences = useMemo(() => {
     const titleLower = activeTopic.title.toLowerCase();
-    return sentences.filter((s) => s.tense.toLowerCase().includes(titleLower)).slice(0, 3);
-  }, [activeTopic.title, sentences]);
+    return sentences
+      .filter((s) => s.tense.toLowerCase().includes(titleLower))
+      .map((s) => ({
+        ...s,
+        wordLabel: vocabById.get(s.vocabId) || '',
+      }))
+      .slice(0, 6);
+  }, [activeTopic.title, sentences, vocabById]);
+
+  const sessionGrammarBank = useMemo(
+    () => getSessionSlice(GRAMMAR_BANK_150, `${quizSessionSeed}:grammar`, SESSION_QUESTION_COUNT),
+    [quizSessionSeed]
+  );
+
+  const visibleBankQuestions = useMemo(() => {
+    if (bankFilterId === 'all') return sessionGrammarBank;
+    return sessionGrammarBank.filter((q) => q.grammarId === bankFilterId);
+  }, [bankFilterId, sessionGrammarBank]);
+
+  const PAGE_SIZE = 5;
+  const totalBankPages = Math.max(1, Math.ceil(visibleBankQuestions.length / PAGE_SIZE));
+  const safeBankPage = Math.min(bankPage, totalBankPages - 1);
+  const pagedBankQuestions = visibleBankQuestions.slice(
+    safeBankPage * PAGE_SIZE,
+    safeBankPage * PAGE_SIZE + PAGE_SIZE
+  );
+  const answeredCount = visibleBankQuestions.filter((q) => bankAnswers[q.id] !== undefined).length;
+  const correctCount = visibleBankQuestions.filter(
+    (q) => bankAnswers[q.id] === q.correctIndex
+  ).length;
+
+  const handleReshuffleGrammar = () => {
+    rotateQuizSessionSeed();
+    setBankAnswers({});
+    setBankPage(0);
+    showToast('30 soal grammar baru disiapkan', 'success', `Diacak dari ${TOTAL_BANK_SIZE} bank soal.`);
+  };
 
   const handleSelectTopic = (id: string) => {
     setSelectedTopicId(id);
+    if (!BASIC_GRAMMAR_IDS.has(id)) {
+      setShowAllReferenceTopics(true);
+    }
     setQuizAnswers({});
     setQuizSubmitted(false);
-    setViewMode('lessons');
+    setViewMode('basic');
   };
 
-  const handleSubmitQuiz = async () => {
+  const handleCheckPractice = () => {
     setQuizSubmitted(true);
     const total = activeTopic.quiz.length;
     const correct = activeTopic.quiz.reduce(
       (acc, q) => (quizAnswers[q.id] === q.correctIndex ? acc + 1 : acc),
       0
     );
-    const pct = total > 0 ? Math.round((correct / total) * 100) : 100;
-    await completeGrammarLesson(activeTopic.id, activeTopic.category, pct);
-    await recordQuizResult('grammar', activeTopic.title, pct, total);
-    showToast(`${activeTopic.title} completed`, 'success', `Quiz score: ${pct}% (+25 XP)`);
+    showToast('Latihan diperiksa', 'success', `${correct} dari ${total} jawaban benar.`);
   };
 
   const handleAnalyzeSentence = async (e: React.FormEvent) => {
@@ -174,26 +238,37 @@ export function GrammarCenterView() {
       explanation: analysis.explanation,
       grammarTopicId: analysis.linkedGrammarTopicId,
     });
-    showToast('Grammar insight saved', 'success', 'Added to your Learner Memory for personalized coaching.');
+    showToast('Catatan grammar disimpan', 'success', 'Tersimpan untuk referensi belajar Anda.');
   };
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Grammar"
-        subtitle="29 structured lessons across Basic Grammar, all 12 Tenses, and Advanced Grammar—plus an AI Grammar Analyzer for any English sentence."
+        title="7 Grammar Dasar Waiter"
+        subtitle="7 pola inti layanan hotel & restoran, rumus ringkas, contoh kosakata, dan 30 soal latihan per login (Bank 150)."
         action={
-          <div className="inline-flex rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-white dark:bg-[#16202C] p-1">
+          <div className="inline-flex flex-wrap rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-white dark:bg-[#16202C] p-1 gap-1">
             <button
               type="button"
-              onClick={() => setViewMode('lessons')}
+              onClick={() => setViewMode('basic')}
               className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                viewMode === 'lessons'
+                viewMode === 'basic'
                   ? 'bg-[#243B53] text-white'
                   : 'text-[#718096] dark:text-slate-300 hover:text-[#243447]'
               }`}
             >
-              Grammar Lessons
+              7 Grammar Dasar
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('quiz')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                viewMode === 'quiz'
+                  ? 'bg-[#243B53] text-white'
+                  : 'text-[#718096] dark:text-slate-300 hover:text-[#243447]'
+              }`}
+            >
+              Latihan 30 Soal
             </button>
             <button
               type="button"
@@ -205,22 +280,158 @@ export function GrammarCenterView() {
               }`}
             >
               <Sparkles className="w-3.5 h-3.5 text-[#3C8D8A]" />
-              <span>AI Grammar Analyzer</span>
+              <span>AI Analyzer</span>
             </button>
           </div>
         }
       />
 
-      {viewMode === 'analyzer' ? (
+      {viewMode === 'quiz' ? (
+        <div className="max-w-4xl space-y-5">
+          <div className="bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-[#243447] dark:text-white">
+                  Latihan Grammar Waiter ({visibleBankQuestions.length} Soal · Bank {TOTAL_BANK_SIZE})
+                </h2>
+                <p className="text-xs text-[#718096]">
+                  Skor sesi: {correctCount} benar dari {answeredCount} dijawab · Klik pilihan untuk cek langsung.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleReshuffleGrammar}
+                className="px-3.5 py-2 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-[#F7F8FA] dark:bg-[#1E2B3B] hover:bg-[#E6F0ED] text-xs font-semibold text-[#243447] dark:text-slate-200 flex items-center gap-1.5"
+              >
+                <Shuffle className="w-3.5 h-3.5 text-[#3C8D8A]" />
+                <span>Acak 30 Soal Baru</span>
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setBankFilterId('all');
+                  setBankPage(0);
+                }}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                  bankFilterId === 'all'
+                    ? 'bg-[#243B53] border-[#243B53] text-white'
+                    : 'border-[#E4E8EE] dark:border-[#263344] text-[#486581] dark:text-slate-300'
+                }`}
+              >
+                Semua ({sessionGrammarBank.length})
+              </button>
+              {BASIC_GRAMMAR_STRUCTURES.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    setBankFilterId(g.id);
+                    setBankPage(0);
+                  }}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                    bankFilterId === g.id
+                      ? 'bg-[#243B53] border-[#243B53] text-white'
+                      : 'border-[#E4E8EE] dark:border-[#263344] text-[#486581] dark:text-slate-300'
+                  }`}
+                >
+                  {g.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {pagedBankQuestions.map((q, localIdx) => {
+              const chosen = bankAnswers[q.id];
+              const isAnswered = chosen !== undefined;
+              const grammarLabel =
+                BASIC_GRAMMAR_STRUCTURES.find((g) => g.id === q.grammarId)?.name || q.grammarId;
+              return (
+                <div
+                  key={q.id}
+                  className="bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl p-5 space-y-3"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-mono font-semibold text-[#3C8D8A]">
+                      Soal {safeBankPage * PAGE_SIZE + localIdx + 1} · {grammarLabel}
+                    </span>
+                  </div>
+                  <div className="text-sm font-semibold text-[#243447] dark:text-white">
+                    {q.question}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {q.options.map((opt, oIdx) => {
+                      const isPicked = chosen === oIdx;
+                      const isRight = oIdx === q.correctIndex;
+                      let cls =
+                        'border-[#E4E8EE] dark:border-[#263344] hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B]';
+                      if (isAnswered) {
+                        if (isRight) {
+                          cls =
+                            'border-[#39856A] bg-[#E6F0ED] dark:bg-[#39856A]/20 text-[#285E4B] dark:text-emerald-200';
+                        } else if (isPicked) {
+                          cls =
+                            'border-[#D65A5A] bg-[#FDF2F2] dark:bg-[#D65A5A]/20 text-[#9E3535] dark:text-rose-200';
+                        }
+                      }
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() =>
+                            setBankAnswers((prev) => ({ ...prev, [q.id]: oIdx }))
+                          }
+                          className={`p-2.5 rounded-lg border text-left text-xs font-medium transition-colors ${cls}`}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {isAnswered && (
+                    <p className="text-xs text-[#486581] dark:text-slate-300 bg-[#F7F8FA] dark:bg-[#1E2B3B] p-2.5 rounded-lg">
+                      {q.explanation}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl px-5 py-3 text-xs">
+            <button
+              type="button"
+              disabled={safeBankPage === 0}
+              onClick={() => setBankPage((p) => Math.max(0, p - 1))}
+              className="px-3 py-1.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] font-semibold disabled:opacity-40"
+            >
+              ← Halaman Sebelumnya
+            </button>
+            <span className="font-mono text-[#718096]">
+              Halaman {safeBankPage + 1} / {totalBankPages}
+            </span>
+            <button
+              type="button"
+              disabled={safeBankPage >= totalBankPages - 1}
+              onClick={() => setBankPage((p) => Math.min(totalBankPages - 1, p + 1))}
+              className="px-3 py-1.5 rounded-lg bg-[#243B53] text-white font-semibold disabled:opacity-40"
+            >
+              Halaman Berikutnya →
+            </button>
+          </div>
+        </div>
+      ) : viewMode === 'analyzer' ? (
         <div className="space-y-6 max-w-5xl">
           <div className="bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl p-6 space-y-4">
             <div className="space-y-1">
               <h2 className="text-base font-semibold text-[#243447] dark:text-white">
-                Sentence Structure &amp; Grammar Analyzer
+                Cek &amp; Analisis Kalimat Waiter
               </h2>
               <p className="text-xs text-[#718096]">
-                Paste or write any English sentence to inspect Subject, Verb, Object, Tense,
-                naturalness, and 1-click transformations.
+                Tulis kalimat layanan tamu untuk melihat koreksi otomatis, pola grammar, dan ubahan tense.
               </p>
             </div>
 
@@ -233,13 +444,23 @@ export function GrammarCenterView() {
                 rows={3}
                 value={sentenceInput}
                 onChange={(e) => setSentenceInput(e.target.value)}
-                placeholder='Example: "Yesterday I go to the office for discuss the new project with my manager."'
+                placeholder='Contoh: "Yesterday I serve table five and bring the menu quickly."'
                 className="w-full px-3.5 py-2.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-[#F7F8FA] dark:bg-[#1E2B3B] text-sm focus:outline-none focus:ring-2 focus:ring-[#3C8D8A]/40 focus:border-[#3C8D8A]"
               />
               {analyzerError && (
-                <p className="text-xs text-[#D65A5A]" role="alert">
-                  {analyzerError}
-                </p>
+                <div
+                  role="alert"
+                  className="p-3 rounded-lg bg-[#FDF2F2] dark:bg-[#D65A5A]/15 border border-[#F5C6C6] dark:border-[#D65A5A]/30 flex flex-wrap items-center justify-between gap-2 text-xs text-[#9E3535] dark:text-rose-200"
+                >
+                  <span>{analyzerError}</span>
+                  <button
+                    type="submit"
+                    disabled={analyzing || !sentenceInput.trim()}
+                    className="px-3 py-1 rounded-md bg-[#243B53] text-white font-semibold shrink-0 disabled:opacity-60"
+                  >
+                    Coba Analisis Ulang
+                  </button>
+                </div>
               )}
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -252,16 +473,16 @@ export function GrammarCenterView() {
                   ) : (
                     <Sparkles className="w-3.5 h-3.5" />
                   )}
-                  <span>{analyzing ? 'Analyzing...' : 'Analyze Grammar'}</span>
+                  <span>{analyzing ? 'Menganalisis...' : 'Analisis Grammar'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() =>
-                    setSentenceInput('Yesterday I go to the office and finish my report quickly.')
+                    setSentenceInput('May I recommend our grilled salmon for you tonight?')
                   }
                   className="px-3 py-2 rounded-lg border border-[#E4E8EE] dark:border-[#263344] text-xs font-medium text-[#718096] hover:text-[#243447] dark:hover:text-white"
                 >
-                  Try Sample Sentence
+                  Coba Contoh Kalimat Waiter
                 </button>
               </div>
             </form>
@@ -292,7 +513,7 @@ export function GrammarCenterView() {
                       onClick={() => handleSelectTopic(analysis.linkedGrammarTopicId!)}
                       className="px-3 py-1.5 rounded-lg bg-[#E6F0ED] dark:bg-[#3C8D8A]/20 text-[#243B53] dark:text-[#E6F0ED] text-xs font-semibold flex items-center gap-1.5"
                     >
-                      <span>Open Matching Lesson</span>
+                      <span>Buka Materi Grammar</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   )}
@@ -302,15 +523,14 @@ export function GrammarCenterView() {
                     className="px-3 py-1.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] text-xs font-semibold text-[#243447] dark:text-slate-200 hover:bg-[#F7F8FA] flex items-center gap-1.5"
                   >
                     <BookmarkPlus className="w-3.5 h-3.5 text-[#3C8D8A]" />
-                    <span>Save Insight</span>
+                    <span>Simpan Catatan</span>
                   </button>
                 </div>
               </div>
 
-              {/* Correction Comparison */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] space-y-1">
-                  <div className="text-xs font-semibold text-[#718096]">Original Input</div>
+                  <div className="text-xs font-semibold text-[#718096]">Kalimat Asli</div>
                   <div className="font-medium text-[#243447] dark:text-slate-100">
                     {analysis.incorrectSentence || analysis.sentence}
                   </div>
@@ -320,7 +540,7 @@ export function GrammarCenterView() {
                 </div>
                 <div className="p-4 rounded-xl bg-[#E6F0ED]/50 dark:bg-[#3C8D8A]/15 border border-[#C3DED6] dark:border-[#3C8D8A]/30 space-y-1 flex items-start justify-between gap-2">
                   <div>
-                    <div className="text-xs font-semibold text-[#3C8D8A]">Recommended Sentence</div>
+                    <div className="text-xs font-semibold text-[#3C8D8A]">Kalimat yang Disarankan</div>
                     <div className="font-semibold text-[#243447] dark:text-white mt-0.5">
                       {analysis.correctedSentence}
                     </div>
@@ -336,7 +556,6 @@ export function GrammarCenterView() {
                 </div>
               </div>
 
-              {/* Clause Part Breakdown */}
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
                 {[
                   { label: 'Subject', value: analysis.subject },
@@ -358,7 +577,7 @@ export function GrammarCenterView() {
               </div>
 
               <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] space-y-1.5 text-xs">
-                <div className="font-semibold text-[#718096]">Pattern &amp; Explanation</div>
+                <div className="font-semibold text-[#718096]">Pola &amp; Penjelasan</div>
                 <div className="font-mono font-semibold text-[#3C8D8A]">
                   {analysis.grammarPattern}
                 </div>
@@ -367,23 +586,9 @@ export function GrammarCenterView() {
                 </p>
               </div>
 
-              {analysis.additionalExamples?.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-[#718096]">
-                    More Sentences Using This Pattern
-                  </div>
-                  <ul className="space-y-1.5 text-sm text-[#243447] dark:text-slate-200 list-disc pl-5">
-                    {analysis.additionalExamples.map((ex, i) => (
-                      <li key={i}>{ex}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* 6 Interactive Sentence Transformations */}
               <div className="pt-4 border-t border-[#E4E8EE] dark:border-[#263344] space-y-3">
                 <div className="text-xs font-semibold text-[#718096]">
-                  Interactive Sentence Transformations
+                  Ubah Bentuk Kalimat
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
@@ -392,7 +597,7 @@ export function GrammarCenterView() {
                     onClick={() => handleTransform('explain_words')}
                     className="px-3 py-1.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-[#F7F8FA] dark:bg-[#1E2B3B] hover:bg-[#E6F0ED] text-xs font-semibold text-[#243447] dark:text-slate-200"
                   >
-                    {transforming === 'explain_words' ? 'Working...' : 'Explain Every Word'}
+                    {transforming === 'explain_words' ? 'Memproses...' : 'Jelaskan Tiap Kata'}
                   </button>
 
                   <div className="inline-flex items-center gap-1 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-[#F7F8FA] dark:bg-[#1E2B3B] p-0.5">
@@ -414,16 +619,16 @@ export function GrammarCenterView() {
                       onClick={() => handleTransform('change_tense')}
                       className="px-2.5 py-1 rounded-md bg-[#243B53] text-white text-xs font-semibold"
                     >
-                      {transforming === 'change_tense' ? '...' : 'Change Tense'}
+                      {transforming === 'change_tense' ? '...' : 'Ubah Tense'}
                     </button>
                   </div>
 
                   {(
                     [
-                      { key: 'negative', label: 'Convert to Negative' },
-                      { key: 'interrogative', label: 'Convert to Interrogative' },
-                      { key: 'natural', label: 'Make It More Natural' },
-                      { key: 'translate_id', label: 'Translate to Indonesian' },
+                      { key: 'negative', label: 'Bentuk Negatif (-)' },
+                      { key: 'interrogative', label: 'Bentuk Tanya (?)' },
+                      { key: 'natural', label: 'Buat Lebih Natural' },
+                      { key: 'translate_id', label: 'Terjemahkan (ID)' },
                     ] as const
                   ).map((btn) => (
                     <button
@@ -433,16 +638,28 @@ export function GrammarCenterView() {
                       onClick={() => handleTransform(btn.key)}
                       className="px-3 py-1.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-[#F7F8FA] dark:bg-[#1E2B3B] hover:bg-[#E6F0ED] text-xs font-semibold text-[#243447] dark:text-slate-200"
                     >
-                      {transforming === btn.key ? 'Working...' : btn.label}
+                      {transforming === btn.key ? 'Memproses...' : btn.label}
                     </button>
                   ))}
                 </div>
 
                 {transformResult && (
                   <div className="p-4 rounded-xl bg-[#E6F0ED]/50 dark:bg-[#3C8D8A]/15 border border-[#C3DED6] dark:border-[#3C8D8A]/30 space-y-2.5 text-xs">
-                    <div className="font-semibold text-[#3C8D8A]">{transformResult.action}</div>
-                    <div className="text-sm font-semibold text-[#243447] dark:text-white">
-                      {transformResult.resultText}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <div className="font-semibold text-[#3C8D8A]">{transformResult.action}</div>
+                        <div className="text-sm font-semibold text-[#243447] dark:text-white">
+                          {transformResult.resultText}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => speakText(transformResult.resultText)}
+                        aria-label="Listen to transformed sentence"
+                        className="p-1.5 rounded-md bg-white/80 dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] text-[#3C8D8A] shrink-0"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                     <p className="text-[#486581] dark:text-slate-300 leading-relaxed">
                       {transformResult.explanation}
@@ -471,95 +688,166 @@ export function GrammarCenterView() {
         </div>
       ) : (
         <>
-          {/* Category Filter Tabs */}
-          <div className="flex flex-wrap gap-2">
-            {(['All', 'Basic Grammar', 'Tenses', 'Advanced Grammar'] as const).map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCategoryFilter(cat)}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-                  categoryFilter === cat
-                    ? 'bg-[#243B53] text-white'
-                    : 'bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] text-[#486581] dark:text-slate-300 hover:bg-[#F7F8FA]'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+              {BASIC_GRAMMAR_STRUCTURES.map((g) => {
+                const active = activeTopic.id === g.id;
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => handleSelectTopic(g.id)}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                      active
+                        ? 'bg-[#243B53] text-white'
+                        : 'bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] text-[#486581] dark:text-slate-300 hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B]'
+                    }`}
+                  >
+                    {g.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowAllReferenceTopics((prev) => !prev)}
+              className="px-3 py-1.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-white dark:bg-[#16202C] text-xs font-semibold text-[#486581] dark:text-slate-300 hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B]"
+            >
+              {showAllReferenceTopics ? 'Sederhanakan (7 Dasar)' : `Topik Lain (${GRAMMAR_TOPICS.length})`}
+            </button>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Clean Syllabus Sidebar */}
+            {/* Simple Grammar List */}
             <div className="lg:col-span-4 bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl divide-y divide-[#E4E8EE] dark:divide-[#263344] max-h-[680px] overflow-y-auto">
               {filteredTopics.map((topic) => {
-                const done = grammarProgress.some((g) => g.topicId === topic.id && g.completed);
+                const basicMeta = BASIC_GRAMMAR_STRUCTURES.find((g) => g.id === topic.id);
                 const active = activeTopic.id === topic.id;
                 return (
                   <button
                     key={topic.id}
                     type="button"
                     onClick={() => handleSelectTopic(topic.id)}
-                    className={`w-full text-left px-4 py-3.5 flex items-center justify-between gap-2 transition-colors ${
+                    className={`w-full text-left px-4 py-3.5 transition-colors ${
                       active
                         ? 'bg-[#E6F0ED]/60 dark:bg-[#3C8D8A]/15'
                         : 'hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B]'
                     }`}
                   >
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-medium text-[#718096]">{topic.category}</div>
-                      <div className="text-sm font-semibold text-[#243447] dark:text-white truncate">
-                        {topic.title}
-                      </div>
+                    <div className="text-[11px] font-medium text-[#3C8D8A]">
+                      {basicMeta ? basicMeta.shortLabel : topic.category}
                     </div>
-                    {done && <CheckCircle2 className="w-4 h-4 text-[#39856A] shrink-0" />}
+                    <div className="text-sm font-semibold text-[#243447] dark:text-white truncate mt-0.5">
+                      {topic.title}
+                    </div>
+                    <div className="text-[11px] font-mono text-[#718096] dark:text-slate-400 truncate mt-0.5">
+                      {basicMeta ? basicMeta.formula : topic.formula}
+                    </div>
                   </button>
                 );
               })}
             </div>
 
-            {/* Centered Lesson Material Reader */}
+            {/* Simplified Lesson Card */}
             <div className="lg:col-span-8 bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl p-6 space-y-6">
               <div className="flex flex-wrap items-start justify-between gap-3 pb-4 border-b border-[#E4E8EE] dark:border-[#263344]">
                 <div>
                   <div className="text-xs font-semibold text-[#3C8D8A] flex items-center gap-1.5">
                     <Layers className="w-3.5 h-3.5" />
-                    <span>{activeTopic.category}</span>
+                    <span>{activeBasicMeta ? `Grammar Dasar · ${activeBasicMeta.shortLabel}` : activeTopic.category}</span>
                   </div>
                   <h2 className="text-2xl font-semibold text-[#243447] dark:text-white mt-1">
                     {activeTopic.title}
                   </h2>
                   <p className="text-sm text-[#718096] dark:text-slate-400 mt-1">
-                    {activeTopic.summary}
+                    {activeBasicMeta ? activeBasicMeta.explanationId : activeTopic.summary}
                   </p>
                 </div>
-                {topicStatus?.completed && (
-                  <div className="text-xs font-semibold text-[#39856A] font-mono tabular-nums">
-                    Completed · Best {topicStatus.quizScore}%
+
+                <button
+                  type="button"
+                  onClick={() => navigateToSentenceBuilder(undefined, activeTopic.title)}
+                  className="px-3.5 py-2 rounded-lg bg-[#243B53] hover:bg-[#1B2D40] text-white text-xs font-semibold flex items-center gap-2 shrink-0 transition-colors"
+                >
+                  <PenTool className="w-3.5 h-3.5" />
+                  <span>Latih Buat Kalimat</span>
+                </button>
+              </div>
+
+              {/* Formula & Time Signal */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344]">
+                  <div className="text-[11px] font-semibold text-[#718096] uppercase tracking-wider mb-1">
+                    Rumus Praktis
+                  </div>
+                  <div className="font-mono text-sm font-semibold text-[#243B53] dark:text-[#66B2AF]">
+                    {activeBasicMeta ? activeBasicMeta.formula : activeTopic.formula}
+                  </div>
+                </div>
+                <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344]">
+                  <div className="text-[11px] font-semibold text-[#718096] uppercase tracking-wider mb-1">
+                    Penanda Waktu / Konteks
+                  </div>
+                  <div className="text-sm font-medium text-[#243447] dark:text-slate-200">
+                    {activeBasicMeta ? activeBasicMeta.whenToUseId : activeTopic.simpleExplanation}
+                  </div>
+                </div>
+              </div>
+
+              {/* Vocabulary Integration: Sentences Generated From User Vocabulary */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-semibold text-[#718096]">
+                    Kalimat dari Kosakata Anda ({vocabulary.length} kata tersimpan)
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => navigateToSentenceBuilder(undefined, activeTopic.title)}
+                    className="text-xs font-semibold text-[#3C8D8A] hover:underline"
+                  >
+                    Buat kalimat sendiri →
+                  </button>
+                </div>
+                {matchingUserSentences.length === 0 ? (
+                  <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] text-xs text-[#718096]">
+                    Tambahkan kosakata di menu Vocabulary untuk melihat kalimat {activeTopic.title} otomatis dari kata pilihan Anda.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {matchingUserSentences.map((s) => (
+                      <div
+                        key={s.id}
+                        className="p-3.5 rounded-xl bg-[#E6F0ED]/50 dark:bg-[#3C8D8A]/15 border border-[#C3DED6] dark:border-[#3C8D8A]/30 flex items-start justify-between gap-3 text-xs"
+                      >
+                        <div className="space-y-1">
+                          {s.wordLabel && (
+                            <span className="inline-block font-mono text-[11px] font-semibold text-[#3C8D8A] capitalize">
+                              Kata: {s.wordLabel}
+                            </span>
+                          )}
+                          <div className="text-sm font-semibold text-[#243447] dark:text-white">
+                            {s.sentence}
+                          </div>
+                          <div className="text-[#486581] dark:text-slate-300">{s.translationId}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => speakText(s.sentence)}
+                          aria-label={`Play sentence: ${s.sentence}`}
+                          className="p-2 rounded-lg bg-white/80 dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] text-[#3C8D8A] shrink-0"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <h3 className="text-xs font-semibold text-[#718096]">Explanation</h3>
-                <p className="text-sm text-[#243447] dark:text-slate-200 leading-relaxed">
-                  {activeTopic.simpleExplanation}
-                </p>
-              </div>
-
-              {/* Clear Visual Formula Box */}
-              <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344]">
-                <div className="text-[11px] font-semibold text-[#718096] uppercase tracking-wider mb-1">
-                  Grammar Formula
-                </div>
-                <div className="font-mono text-sm font-semibold text-[#243B53] dark:text-[#66B2AF]">
-                  {activeTopic.formula}
-                </div>
-              </div>
-
               {/* Examples */}
               <div className="space-y-3">
-                <h3 className="text-xs font-semibold text-[#718096]">Examples &amp; Translations</h3>
+                <h3 className="text-xs font-semibold text-[#718096]">Contoh Sederhana &amp; Arti</h3>
                 {activeTopic.examples.map((ex, idx) => (
                   <div
                     key={idx}
@@ -584,51 +872,10 @@ export function GrammarCenterView() {
                 ))}
               </div>
 
-              {/* Personal Vocabulary Integration */}
-              {matchingUserSentences.length > 0 && (
-                <div className="space-y-2">
-                  <h3 className="text-xs font-semibold text-[#718096]">
-                    From Your Vocabulary ({vocabulary.length} words)
-                  </h3>
-                  <div className="space-y-2">
-                    {matchingUserSentences.map((s) => (
-                      <div
-                        key={s.id}
-                        className="p-3.5 rounded-xl bg-[#E6F0ED]/50 dark:bg-[#3C8D8A]/15 border border-[#C3DED6] dark:border-[#3C8D8A]/30 text-xs space-y-0.5"
-                      >
-                        <div className="font-semibold text-[#243447] dark:text-white">
-                          {s.sentence}
-                        </div>
-                        <div className="text-[#486581] dark:text-slate-300">{s.translationId}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Common Mistakes */}
-              <div className="space-y-2">
-                <h3 className="text-xs font-semibold text-[#718096]">Common Mistakes</h3>
-                {activeTopic.commonMistakes.map((cm, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3.5 rounded-xl bg-[#FDF2F2]/60 dark:bg-[#D65A5A]/10 border border-[#F5C6C6] dark:border-[#D65A5A]/30 text-xs space-y-1"
-                  >
-                    <div className="text-[#9E3535] dark:text-rose-300">
-                      <span className="font-semibold">Avoid:</span> {cm.incorrect}
-                    </div>
-                    <div className="text-[#285E4B] dark:text-emerald-300">
-                      <span className="font-semibold">Use instead:</span> {cm.correct}
-                    </div>
-                    <div className="text-[#486581] dark:text-slate-300">{cm.why}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Interactive Quiz */}
+              {/* Quick Self-Check Quiz (Optional, No Tracking/XP) */}
               <div className="pt-4 border-t border-[#E4E8EE] dark:border-[#263344] space-y-4">
                 <h3 className="text-base font-semibold text-[#243447] dark:text-white">
-                  Interactive Practice Quiz
+                  Cek Pemahaman Singkat
                 </h3>
                 {activeTopic.quiz.map((q, qIdx) => (
                   <div key={q.id} className="space-y-2">
@@ -669,7 +916,7 @@ export function GrammarCenterView() {
                     </div>
                     {quizSubmitted && (
                       <p className="text-xs text-[#486581] dark:text-slate-300 bg-[#F7F8FA] dark:bg-[#1E2B3B] p-2.5 rounded-lg">
-                        Explanation: {q.explanation}
+                        Penjelasan: {q.explanation}
                       </p>
                     )}
                   </div>
@@ -679,10 +926,10 @@ export function GrammarCenterView() {
                   {!quizSubmitted ? (
                     <button
                       type="button"
-                      onClick={handleSubmitQuiz}
+                      onClick={handleCheckPractice}
                       className="px-4 py-2 rounded-lg bg-[#243B53] hover:bg-[#1B2D40] text-white text-xs font-semibold transition-colors"
                     >
-                      Submit &amp; Complete Lesson
+                      Periksa Jawaban
                     </button>
                   ) : (
                     <button
@@ -693,7 +940,7 @@ export function GrammarCenterView() {
                       }}
                       className="px-4 py-2 rounded-lg border border-[#E4E8EE] dark:border-[#263344] text-xs font-semibold text-[#243447] dark:text-slate-200 hover:bg-[#F7F8FA]"
                     >
-                      Retake Quiz
+                      Ulangi Cek
                     </button>
                   )}
                 </div>

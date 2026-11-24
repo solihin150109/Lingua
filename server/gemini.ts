@@ -1,11 +1,11 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import {
   GRAMMAR_TOPICS,
-} from '../src/lib/curriculum';
+} from '../src/lib/curriculum.ts';
 import {
   mapMistakeToGrammarTopicId,
   normalizeSentenceEvaluation,
-} from '../src/lib/aiMemory';
+} from '../src/lib/aiMemory.ts';
 import type {
   AiDailyChallenge,
   AssistantActionLink,
@@ -65,40 +65,115 @@ function setCached<T>(key: string, value: T) {
   responseCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
 }
 
-function getAiClient(): GoogleGenAI {
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const dailyExhaustedUntil = new Map<string, number>();
+
+function isModelDailyExhausted(model: string): boolean {
+  const until = dailyExhaustedUntil.get(model);
+  if (!until) return false;
+  if (Date.now() > until) {
+    dailyExhaustedUntil.delete(model);
+    return false;
+  }
+  return true;
+}
+
+function getAiClient(timeoutMs = 22000): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     throw new Error('GEMINI_API_KEY is not configured in Settings > Secrets.');
   }
   return new GoogleGenAI({
     apiKey,
-    apiVersion: 'v1beta',
     httpOptions: {
-      timeout: 18000,
-      retryOptions: { attempts: 1 },
+      timeout: timeoutMs,
       headers: { 'User-Agent': 'aistudio-build' },
     },
   });
+}
+
+function getGroqApiKey(): string | null {
+  const key = (process.env.GROQ_API_KEY || '').trim();
+  if (!key || key === 'MY_GROQ_API_KEY') return null;
+  return key;
+}
+
+export function isGroqConfigured(): boolean {
+  return Boolean(getGroqApiKey());
 }
 
 export function isGeminiConfigured(): boolean {
   return Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
 }
 
-function formatGeminiError(err: unknown): Error {
-  const raw = err instanceof Error ? err.message : String(err || 'Gemini AI request failed.');
-  try {
-    const parsed = JSON.parse(raw);
-    const msg = parsed?.error?.message || parsed?.message;
-    if (msg) return new Error(msg);
-  } catch {
-    // ignore JSON parse failure
+export function getActiveTextProvider(): 'groq' | 'gemini' | 'none' {
+  if (isGroqConfigured()) return 'groq';
+  if (isGeminiConfigured()) return 'gemini';
+  return 'none';
+}
+
+function extractRawGeminiMessage(err: unknown): string {
+  let raw = err instanceof Error ? err.message : String(err || 'Gemini AI request failed.');
+  for (let depth = 0; depth < 3; depth += 1) {
+    try {
+      const parsed = JSON.parse(raw);
+      const nested = parsed?.error?.message || parsed?.message;
+      if (typeof nested === 'string' && nested !== raw) {
+        raw = nested;
+        continue;
+      }
+    } catch {
+      // ignore
+    }
+    break;
   }
   if (raw.includes('"message"')) {
     const match = raw.match(/"message"\s*:\s*"([^"]+)"/);
-    if (match?.[1]) return new Error(match[1]);
+    if (match?.[1]) return match[1];
   }
-  return err instanceof Error ? err : new Error(raw);
+  return raw;
+}
+
+function isDailyQuotaError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err || '')).toLowerCase();
+  return (
+    msg.includes('quota exceeded') ||
+    msg.includes('per day') ||
+    msg.includes('free_tier_requests')
+  );
+}
+
+function formatGeminiError(err: unknown): Error & { statusCode?: number } {
+  const msg = extractRawGeminiMessage(err);
+  const lower = msg.toLowerCase();
+
+  let statusCode = 500;
+  let friendly = msg;
+
+  if (isDailyQuotaError(err) || lower.includes('429') || lower.includes('resource_exhausted')) {
+    statusCode = 429;
+    friendly =
+      'Kuota harian API Gemini sedang penuh (Free Tier). Tunggu beberapa saat atau tambahkan API key dengan billing aktif di Settings > Secrets.';
+  } else if (
+    lower.includes('503') ||
+    lower.includes('high demand') ||
+    lower.includes('unavailable') ||
+    lower.includes('overloaded')
+  ) {
+    statusCode = 503;
+    friendly =
+      'Server AI Gemini sedang mengalami lonjakan permintaan sementara (High Demand). Silakan klik coba lagi dalam beberapa detik.';
+  } else if (lower.includes('403') || lower.includes('permission_denied') || lower.includes('api_key_invalid')) {
+    statusCode = 403;
+    friendly = 'API key Gemini tidak valid atau belum memiliki izin. Periksa Settings > Secrets.';
+  }
+
+  const out = new Error(friendly) as Error & { statusCode?: number };
+  out.statusCode = statusCode;
+  return out;
 }
 
 function isTransientOrParseError(err: unknown): boolean {
@@ -158,6 +233,141 @@ function formatLearnerContextBlock(ctx?: Partial<LearnerContextSummary> | null):
   return lines.join('\n');
 }
 
+function describeSchemaNode(schema: any, depth = 0): string {
+  if (!schema || typeof schema !== 'object' || depth > 5) return 'any';
+  const typeVal = String(schema.type || '').toUpperCase();
+  const nullableNote = schema.nullable ? ' (or null)' : '';
+
+  if (typeVal === 'OBJECT' && schema.properties) {
+    const entries = Object.entries(schema.properties).map(([key, prop]: [string, any]) => {
+      const desc = prop?.description ? ` /* ${prop.description} */` : '';
+      return `"${key}": ${describeSchemaNode(prop, depth + 1)}${desc}`;
+    });
+    return `{ ${entries.join(', ')} }${nullableNote}`;
+  }
+  if (typeVal === 'ARRAY' && schema.items) {
+    return `[${describeSchemaNode(schema.items, depth + 1)}]${nullableNote}`;
+  }
+  if (typeVal === 'INTEGER' || typeVal === 'NUMBER') {
+    return `number${nullableNote}`;
+  }
+  if (typeVal === 'BOOLEAN') {
+    return `boolean${nullableNote}`;
+  }
+  return `string${nullableNote}`;
+}
+
+function stripJsonCodeFences(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('```')) {
+    return trimmed
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+  }
+  return trimmed;
+}
+
+function formatGroqError(status: number, rawMessage: string): Error & { statusCode?: number } {
+  const lower = rawMessage.toLowerCase();
+  let statusCode = status || 500;
+  let friendly = rawMessage || 'Permintaan ke Groq AI gagal diproses.';
+
+  if (status === 401 || status === 403 || lower.includes('invalid api key') || lower.includes('authentication')) {
+    statusCode = 401;
+    friendly = 'GROQ_API_KEY tidak valid atau kedaluwarsa. Periksa pengaturan di Settings > Secrets.';
+  } else if (status === 429 || lower.includes('rate limit')) {
+    statusCode = 429;
+    friendly = 'Batas permintaan Groq tercapai sementara. Silakan coba lagi dalam beberapa detik.';
+  } else if (status >= 500 || lower.includes('timeout') || lower.includes('aborted')) {
+    statusCode = 503;
+    friendly = 'Server Groq AI sedang sibuk sementara. Silakan klik coba lagi.';
+  }
+
+  const out = new Error(friendly) as Error & { statusCode?: number };
+  out.statusCode = statusCode;
+  return out;
+}
+
+async function callGroqJson<T>(params: {
+  contents: string;
+  systemInstruction?: string;
+  responseSchema: unknown;
+  preferLite?: boolean;
+}): Promise<T> {
+  const apiKey = getGroqApiKey();
+  if (!apiKey) {
+    throw new Error('GROQ_API_KEY is not configured.');
+  }
+
+  const models = params.preferLite
+    ? ['llama-3.1-8b-instant', 'llama-3.3-70b-versatile']
+    : ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+
+  const schemaShape = describeSchemaNode(params.responseSchema);
+  const systemMessage = [
+    params.systemInstruction || 'You are a helpful AI English tutor.',
+    `Return ONLY a valid JSON object matching this exact schema and field names:\n${schemaShape}`,
+  ].join('\n\n');
+
+  let lastStatus = 500;
+  let lastMessage = 'Groq AI request failed.';
+
+  for (let i = 0; i < models.length; i += 1) {
+    const model = models[i];
+    if (i > 0) await sleep(250);
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          temperature: 0.35,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: params.contents },
+          ],
+        }),
+        signal: AbortSignal.timeout(14000),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as {
+        choices?: { message?: { content?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        error?: { message?: string };
+      };
+
+      if (!response.ok) {
+        lastStatus = response.status;
+        lastMessage = payload?.error?.message || `Groq HTTP ${response.status}`;
+        if (response.status === 401 || response.status === 403) {
+          throw formatGroqError(response.status, lastMessage);
+        }
+        continue;
+      }
+
+      usageStats.requests += 1;
+      usageStats.promptTokens += payload.usage?.prompt_tokens || 0;
+      usageStats.outputTokens += payload.usage?.completion_tokens || 0;
+
+      const content = stripJsonCodeFences(payload.choices?.[0]?.message?.content || '{}');
+      return JSON.parse(content) as T;
+    } catch (err) {
+      if ((err as { statusCode?: number })?.statusCode === 401) {
+        throw err;
+      }
+      lastMessage = err instanceof Error ? err.message : String(err);
+      console.warn(`[groq] attempt ${i + 1} (${model}) failed:`, lastMessage.slice(0, 200));
+    }
+  }
+
+  throw formatGroqError(lastStatus, lastMessage);
+}
+
 async function generateJsonWithFallback<T>(params: {
   contents: string;
   systemInstruction?: string;
@@ -170,6 +380,19 @@ async function generateJsonWithFallback<T>(params: {
     if (cached) return cached;
   }
 
+  if (isGroqConfigured()) {
+    try {
+      const parsed = await callGroqJson<T>(params);
+      if (params.cacheKey) setCached(params.cacheKey, parsed);
+      return parsed;
+    } catch (groqErr) {
+      if (!isGeminiConfigured() || (groqErr as { statusCode?: number })?.statusCode === 401) {
+        throw groqErr;
+      }
+      console.warn('[groq] falling back to Gemini:', groqErr instanceof Error ? groqErr.message : groqErr);
+    }
+  }
+
   const ai = getAiClient();
   const baseConfig = {
     ...(params.systemInstruction ? { systemInstruction: params.systemInstruction } : {}),
@@ -179,41 +402,55 @@ async function generateJsonWithFallback<T>(params: {
 
   const primaryModel = params.preferLite ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
   const fallbackModel = params.preferLite ? 'gemini-4-hydrogen' : 'gemini-3.1-flash-lite';
+  const rawSequence = [primaryModel, fallbackModel, primaryModel, fallbackModel, primaryModel];
+  const modelSequence = rawSequence.filter((m) => !isModelDailyExhausted(m));
+  const candidates = modelSequence.length > 0 ? modelSequence : [primaryModel, fallbackModel];
 
-  try {
-    const response = await ai.models.generateContent({
-      model: primaryModel,
-      contents: params.contents,
-      config:
-        primaryModel === 'gemini-4-hydrogen'
-          ? { ...baseConfig, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-          : baseConfig,
-    });
-    recordUsage(response);
-    const parsed = JSON.parse((response.text ?? '{}').trim()) as T;
-    if (params.cacheKey) setCached(params.cacheKey, parsed);
-    return parsed;
-  } catch (err) {
-    if (!isTransientOrParseError(err)) {
-      throw formatGeminiError(err);
+  let lastError: unknown = null;
+  let lastNonQuotaError: unknown = null;
+  const skippedDaily = new Set<string>();
+
+  for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+    const model = candidates[attempt];
+    if (skippedDaily.has(model)) continue;
+
+    if (attempt > 0) {
+      const backoffMs = 600 * Math.pow(1.65, attempt - 1) + Math.floor(Math.random() * 250);
+      await sleep(backoffMs);
     }
+
     try {
-      const fallback = await ai.models.generateContent({
-        model: fallbackModel,
+      const response = await ai.models.generateContent({
+        model,
         contents: params.contents,
         config:
-          fallbackModel === 'gemini-4-hydrogen'
+          model === 'gemini-4-hydrogen'
             ? { ...baseConfig, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
             : baseConfig,
       });
-      recordUsage(fallback);
-      const parsed = JSON.parse((fallback.text ?? '{}').trim()) as T;
+      recordUsage(response);
+      const parsed = JSON.parse((response.text ?? '{}').trim()) as T;
       if (params.cacheKey) setCached(params.cacheKey, parsed);
       return parsed;
-    } catch (fallbackErr) {
-      throw formatGeminiError(fallbackErr);
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `[gemini] attempt ${attempt + 1} (${model}) failed:`,
+        extractRawGeminiMessage(err).slice(0, 220)
+      );
+      if (isDailyQuotaError(err)) {
+        dailyExhaustedUntil.set(model, Date.now() + 10 * 60 * 1000);
+        skippedDaily.add(model);
+        continue;
+      }
+      lastNonQuotaError = err;
+      if (!isTransientOrParseError(err)) {
+        throw formatGeminiError(err);
+      }
     }
   }
+
+  throw formatGeminiError(lastNonQuotaError || lastError);
 }
 
 // ---------------------------------------------------------------------------
@@ -230,20 +467,20 @@ function extractAssistantActions(
 
   if (combined.includes('grammar') || combined.includes('tense') || combined.includes('past') || combined.includes('perfect') || weakTopic) {
     const topicId = mapMistakeToGrammarTopicId(weakTopic || combined);
-    const title = GRAMMAR_TOPICS.find((t) => t.id === topicId)?.title || 'Grammar Lesson';
+    const title = GRAMMAR_TOPICS.find((t) => t.id === topicId)?.title || 'Simple Present';
     links.push({ label: `Study ${title}`, route: 'grammar', topicId });
   }
   if (combined.includes('vocab') || combined.includes('word') || combined.includes('flashcard') || (ctx?.weakVocabWords?.length || 0) > 0) {
-    links.push({ label: 'Review Weak Vocabulary', route: 'review-vocabulary' });
+    links.push({ label: 'Open Vocabulary Bank', route: 'vocabulary' });
   }
-  if (combined.includes('speak') || combined.includes('natural') || combined.includes('conversation') || combined.includes('challenge')) {
-    links.push({ label: 'Practice with AI Tutor', route: 'ai-tutor' });
+  if (combined.includes('speak') || combined.includes('natural') || combined.includes('conversation') || combined.includes('script')) {
+    links.push({ label: 'Practice Script Speaking', route: 'speaking-community' });
   }
   if (combined.includes('sentence') || combined.includes('write')) {
-    links.push({ label: 'Open Sentence Coach', route: 'sentence-builder' });
+    links.push({ label: 'Open Sentence Builder', route: 'sentence-builder' });
   }
   if (links.length === 0) {
-    links.push({ label: 'Open Learning Path', route: 'learning-path' });
+    links.push({ label: 'Build Sentences', route: 'sentence-builder' });
   }
   return links.slice(0, 3);
 }
@@ -256,7 +493,6 @@ export async function streamPersonalAssistant(
   },
   onChunk: (delta: string) => void
 ): Promise<{ fullText: string; actions: AssistantActionLink[] }> {
-  const ai = getAiClient();
   const recentHistory = params.history
     .slice(-6)
     .map((m) => `${m.role === 'user' ? 'Learner' : 'LINGUA Coach'}: ${m.text}`)
@@ -271,44 +507,124 @@ ${recentHistory || 'None'}
 Learner question:
 ${params.question}`;
 
-  const systemInstruction = `You are the LINGUA Personal AI Learning Coach for an Indonesian learner improving their English.
-Always personalize your advice using the Learner Profile & Live Data provided above—reference their actual weak grammar topics, weak/known vocabulary words, goals, or speaking minutes directly rather than giving generic boilerplate.
-Keep answers concise, practical, encouraging, and structured with clear English examples + brief Indonesian explanations when helpful.
-If they ask "What should I learn today?" or "Give me a speaking challenge", use their weak vocab/grammar and goals directly.`;
+  const systemInstruction = `You are the LINGUA Personal AI Learning Coach for an Indonesian hotel & restaurant waiter/server improving their English communication.
+Always personalize your advice using the Learner Profile & Live Data provided above—reference their actual weak grammar topics, vocabulary words, or goals directly rather than giving generic boilerplate.
+Keep answers concise, practical, encouraging, and structured with hospitality service English examples + brief Indonesian explanations.`;
 
   let fullText = '';
-  try {
-    const stream = await ai.models.generateContentStream({
-      model: 'gemini-4-hydrogen',
-      contents: prompt,
-      config: {
-        systemInstruction,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      },
-    });
-    usageStats.requests += 1;
-    for await (const chunk of stream) {
-      const piece = chunk.text || '';
-      if (piece) {
-        fullText += piece;
-        onChunk(piece);
+
+  const groqKey = getGroqApiKey();
+  if (groqKey) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          stream: true,
+          temperature: 0.5,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(18000),
+      });
+
+      if (!response.ok || !response.body) {
+        const errPayload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+        throw formatGroqError(response.status, errPayload?.error?.message || 'Groq stream error');
+      }
+
+      usageStats.requests += 1;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line.startsWith('data:')) continue;
+          const dataStr = line.slice(5).trim();
+          if (dataStr === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(dataStr) as {
+              choices?: { delta?: { content?: string } }[];
+            };
+            const piece = parsed.choices?.[0]?.delta?.content || '';
+            if (piece) {
+              fullText += piece;
+              onChunk(piece);
+            }
+          } catch {
+            // ignore partial SSE line
+          }
+        }
+      }
+
+      if (fullText) {
+        return {
+          fullText,
+          actions: extractAssistantActions(params.question, fullText, params.learnerContext),
+        };
+      }
+    } catch (err) {
+      if (!isGeminiConfigured() || (err as { statusCode?: number })?.statusCode === 401) {
+        throw err;
+      }
+      console.warn('[groq] assistant stream fallback to Gemini:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  const ai = getAiClient();
+  const streamModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter(
+    (m) => !isModelDailyExhausted(m)
+  );
+  const candidates = streamModels.length ? streamModels : ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'];
+  let streamErr: unknown = null;
+
+  for (let idx = 0; idx < candidates.length; idx += 1) {
+    const model = candidates[idx];
+    if (idx > 0) await sleep(500);
+    try {
+      const stream = await ai.models.generateContentStream({
+        model,
+        contents: prompt,
+        config:
+          model === 'gemini-4-hydrogen'
+            ? { systemInstruction, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : { systemInstruction },
+      });
+      usageStats.requests += 1;
+      for await (const chunk of stream) {
+        const piece = chunk.text || '';
+        if (piece) {
+          fullText += piece;
+          onChunk(piece);
+        }
+      }
+      streamErr = null;
+      break;
+    } catch (err) {
+      streamErr = err;
+      if (isDailyQuotaError(err)) {
+        dailyExhaustedUntil.set(model, Date.now() + 10 * 60 * 1000);
+      } else if (!isTransientOrParseError(err)) {
+        throw formatGeminiError(err);
       }
     }
-  } catch (err) {
-    if (!isTransientOrParseError(err)) throw formatGeminiError(err);
-    const fallback = await ai.models.generateContentStream({
-      model: 'gemini-3.1-flash-lite',
-      contents: prompt,
-      config: { systemInstruction },
-    });
-    usageStats.requests += 1;
-    for await (const chunk of fallback) {
-      const piece = chunk.text || '';
-      if (piece) {
-        fullText += piece;
-        onChunk(piece);
-      }
-    }
+  }
+
+  if (streamErr && !fullText) {
+    throw formatGeminiError(streamErr);
   }
 
   return {
@@ -320,28 +636,156 @@ If they ask "What should I learn today?" or "Give me a speaking challenge", use 
 // ---------------------------------------------------------------------------
 // 2. AI Vocabulary Intelligence (Full 14-point Pack + Interactive Actions)
 // ---------------------------------------------------------------------------
+const BASIC_GRAMMAR_REQUIRED = [
+  {
+    tense: 'Simple Present',
+    formula: 'Subject + Verb 1 (s/es) / be (am/is/are)',
+    fallbackSentence: (w: string) => `We use "${w}" every day to serve restaurant guests politely.`,
+    fallbackId: (w: string) => `Kami menggunakan "${w}" setiap hari untuk melayani tamu restoran dengan sopan.`,
+  },
+  {
+    tense: 'Present Continuous',
+    formula: 'Subject + am/is/are + Verb-ing',
+    fallbackSentence: (w: string) => `I am checking "${w}" for Table 4 right now.`,
+    fallbackId: (w: string) => `Saya sedang memeriksa "${w}" untuk Meja 4 sekarang.`,
+  },
+  {
+    tense: 'Simple Past',
+    formula: 'Subject + Verb 2 / was-were',
+    fallbackSentence: (w: string) => `Earlier today, I handled "${w}" for a hotel guest.`,
+    fallbackId: (w: string) => `Tadi, saya menangani "${w}" untuk seorang tamu hotel.`,
+  },
+  {
+    tense: 'Simple Future',
+    formula: 'Subject + will + Verb 1',
+    fallbackSentence: (w: string) => `I will prepare "${w}" for your table right away.`,
+    fallbackId: (w: string) => `Saya akan menyiapkan "${w}" untuk meja Anda segera.`,
+  },
+  {
+    tense: 'Present Perfect',
+    formula: 'Subject + have/has + Verb 3',
+    fallbackSentence: (w: string) => `I have already confirmed "${w}" with the kitchen team.`,
+    fallbackId: (w: string) => `Saya sudah mengonfirmasi "${w}" dengan tim dapur.`,
+  },
+  {
+    tense: 'Modal Verbs',
+    formula: 'Would / Could / May / Can + Subject + Verb 1',
+    fallbackSentence: (w: string) => `Would you like me to check "${w}" for your order?`,
+    fallbackId: (w: string) => `Apakah Anda ingin saya memeriksa "${w}" untuk pesanan Anda?`,
+  },
+  {
+    tense: 'Imperatives',
+    formula: '(Please / Kindly) + Verb 1 + Object',
+    fallbackSentence: (w: string) => `Please let me know if you need "${w}" during your meal.`,
+    fallbackId: (w: string) => `Silakan beri tahu saya jika Anda membutuhkan "${w}" selama bersantap.`,
+  },
+];
+
+function normalizeVocabularyPayload(cleanWord: string, raw: any) {
+  const validCategories = ['noun', 'verb', 'adjective', 'adverb', 'preposition', 'phrase', 'other'];
+  const rawCategory = String(raw?.category || 'other').toLowerCase().trim();
+  const category = validCategories.includes(rawCategory) ? rawCategory : 'other';
+
+  const toStringList = (arr: unknown, max = 10) =>
+    Array.isArray(arr)
+      ? arr
+          .map((item) => String(item || '').trim().slice(0, 150))
+          .filter(Boolean)
+          .slice(0, max)
+      : [];
+
+  const rawSentences = Array.isArray(raw?.sentences) ? raw.sentences : [];
+  const normalizedSentences = BASIC_GRAMMAR_REQUIRED.map((req, idx) => {
+    const matched =
+      rawSentences.find((s: any) =>
+        String(s?.tense || '')
+          .toLowerCase()
+          .includes(req.tense.toLowerCase())
+      ) || rawSentences[idx];
+    const sentence = String(matched?.sentence || req.fallbackSentence(cleanWord)).trim().slice(0, 300);
+    return {
+      tense: req.tense,
+      sentence,
+      translationId: String(matched?.translationId || req.fallbackId(cleanWord)).trim().slice(0, 300),
+      formula: String(matched?.formula || req.formula).trim().slice(0, 160),
+      subject: String(matched?.subject || (req.tense === 'Imperatives' ? '(You)' : 'I')).trim().slice(0, 80),
+      verb: String(matched?.verb || 'serve').trim().slice(0, 80),
+      objectComplement: String(matched?.objectComplement || cleanWord).trim().slice(0, 160),
+      structureReason: String(matched?.structureReason || `Menunjukkan pola ${req.tense}.`)
+        .trim()
+        .slice(0, 400),
+      dailyUsage: String(matched?.dailyUsage || 'Dipakai waiter saat melayani tamu di hotel atau restoran.')
+        .trim()
+        .slice(0, 400),
+      affirmative: String(matched?.affirmative || sentence).trim().slice(0, 300),
+      negative: String(matched?.negative || `Not: ${sentence}`).trim().slice(0, 300),
+      interrogative: String(matched?.interrogative || `Question form of: ${sentence}`)
+        .trim()
+        .slice(0, 300),
+    };
+  });
+
+  const dailyConversations = Array.isArray(raw?.dailyConversations)
+    ? raw.dailyConversations
+        .slice(0, 4)
+        .map((c: any, idx: number) => ({
+          speaker: String(c?.speaker || (idx % 2 === 0 ? 'Waiter' : 'Guest')).trim().slice(0, 40),
+          line: String(c?.line || '').trim().slice(0, 220),
+          translationId: String(c?.translationId || '').trim().slice(0, 220),
+        }))
+        .filter((c: { line: string }) => c.line.length > 0)
+    : [];
+
+  return {
+    word: String(raw?.word || cleanWord).trim().slice(0, 80) || cleanWord,
+    meaningId: String(raw?.meaningId || cleanWord).trim().slice(0, 200) || cleanWord,
+    category,
+    ipa: String(raw?.ipa || '/.../').trim().slice(0, 100),
+    commonUsage: String(raw?.commonUsage || '').trim().slice(0, 600),
+    grammarExplanation: String(raw?.grammarExplanation || '').trim().slice(0, 1500),
+    synonyms: toStringList(raw?.synonyms, 8),
+    antonyms: toStringList(raw?.antonyms, 8),
+    collocations: toStringList(raw?.collocations, 8),
+    phrasalVerbs: toStringList(raw?.phrasalVerbs, 8),
+    relatedWords: toStringList(raw?.relatedWords, 8),
+    commonMistakes: toStringList(raw?.commonMistakes, 6),
+    dailyConversations,
+    sentences: normalizedSentences,
+  };
+}
+
 export async function generateVocabularyMaterial(word: string, level: string) {
   const cleanWord = word.trim();
-  const cacheKey = `vocab:${level}:${cleanWord.toLowerCase()}`;
+  const cacheKey = `vocab-basic7:${level}:${cleanWord.toLowerCase()}`;
 
-  return generateJsonWithFallback({
+  const raw = await generateJsonWithFallback({
     cacheKey,
-    contents: `Generate complete English learning material for the vocabulary word or phrase "${cleanWord}" tailored for an Indonesian learner at CEFR level ${level}.
+    contents: `Generate complete, simple, practical English learning material for the vocabulary word or phrase "${cleanWord}" tailored for an Indonesian hotel & restaurant waiter/server (reference level ${level}).
 
 Requirements:
 1. Word & Indonesian meaning (meaningId)
 2. Part of Speech (category: noun, verb, adjective, adverb, preposition, phrase, other)
 3. Accurate IPA Pronunciation
-4. Common usage summary (how native speakers commonly use it)
-5. Synonyms (3-5), Antonyms (2-4 if applicable), Word Family / Related words (2-4)
-6. Natural Collocations (3-5 common word pairings)
-7. Relevant Phrasal Verbs (if any naturally exist for this word; otherwise return empty array [])
-8. Grammar Analysis (patterns, transitivity, prepositions, register)
-9. Common Mistakes made by Indonesian learners with this word (2-3 crisp examples)
-10. Daily Conversation Examples (2 short 2-line mini-dialogues showing realistic spoken English + Indonesian meaning)
-11. Linguistically natural Example Sentences across 5 to 6 genuinely natural grammar structures suited to THIS specific word/part of speech (e.g. for verbs use tenses like Simple Present, Simple Past, Present Perfect, Simple Future, Present Continuous when non-stative; for stative verbs, adjectives, prepositions, or idioms pick only structures where the word actually sounds natural—NEVER force unnatural continuous or passive forms onto a word just to fill a tense quota!).`,
+4. Common usage summary (how waiters & hospitality staff naturally use it with guests)
+5. Synonyms (3-4), Antonyms (2-3 if applicable), Related words (2-3)
+6. Natural Collocations (3-4 common hospitality/everyday pairings)
+7. Relevant Phrasal Verbs (if any naturally exist; otherwise [])
+8. Simple Grammar Guide (short, easy Indonesian explanation)
+9. Common Mistakes made by Indonesian learners with this word (2 crisp examples)
+10. Daily Conversation Examples (2 short 2-line Waiter/Guest mini-dialogues + Indonesian meaning)
+11. MANDATORY 7 BASIC GRAMMAR SENTENCES — You MUST generate exactly 7 example sentences (preferably in hotel/restaurant service context), ONE for EACH of these 7 Basic Grammars in this exact order and using these exact "tense" labels:
+    1) "Simple Present"
+    2) "Present Continuous"
+    3) "Simple Past"
+    4) "Simple Future"
+    5) "Present Perfect"
+    6) "Modal Verbs" (polite offers/requests using Would/Could/May/Can + Verb 1)
+    7) "Imperatives" (polite guest instructions using Please/Kindly + Verb 1)
+Rules for the 7 sentences:
+- Every sentence MUST actively include "${cleanWord}" (or its grammatically inflected form when it is a verb).
+- Never skip any of the 7 basic grammars!`,
     systemInstruction:
-      'You are an expert English-Indonesian lexicographer and applied linguist. Ensure every example sentence sounds like natural native English, never literal translationese. Return strictly valid JSON.',
+      'You are an expert English-Indonesian hospitality & waiter communication coach. Always output exactly the 7 required Basic Grammar sentences (Simple Present, Present Continuous, Simple Past, Simple Future, Present Perfect, Modal Verbs, Imperatives) with natural restaurant/hotel waiter English and clear Indonesian translations. Return strictly valid JSON.',
     responseSchema: {
       type: Type.OBJECT,
       properties: {
@@ -425,6 +869,10 @@ Requirements:
       ],
     },
   });
+
+  const normalized = normalizeVocabularyPayload(cleanWord, raw);
+  setCached(cacheKey, normalized);
+  return normalized;
 }
 
 export async function assistVocabularyWord(params: {
@@ -486,6 +934,7 @@ export async function evaluateVocabularyPractice(params: {
   userAnswer: string;
 }) {
   return generateJsonWithFallback({
+    preferLite: true,
     contents: `Evaluate a learner's vocabulary practice response.
 Target word: "${params.word}" (Indonesian meaning: "${params.meaningId}")
 Practice mode: ${params.mode}
@@ -617,16 +1066,25 @@ Action: ${directives[params.action]}`,
 }
 
 // ---------------------------------------------------------------------------
-// 4. AI Sentence Coach (5-Axis Evaluation + Naturalness Distinction)
+// 4. AI Sentence Coach (Level-Free Practice + Basic Grammar Support)
 // ---------------------------------------------------------------------------
 export async function generateSentenceChallenge(
   words: string[],
-  difficulty: string,
+  grammarFocus?: string,
   learnerContext?: Partial<LearnerContextSummary> | null
 ) {
+  const wordPart = words.length
+    ? `incorporating these vocabulary words naturally: ${words.join(', ')}`
+    : 'for a hotel or restaurant waiter serving guests politely';
+  const grammarPart = grammarFocus && grammarFocus !== 'Free'
+    ? `Target basic grammar pattern: ${grammarFocus}.`
+    : 'Any of the 7 basic waiter grammar patterns is welcome.';
+
   return generateJsonWithFallback({
-    contents: `Create a realistic sentence-building challenge at ${difficulty} level requiring the learner to use these vocabulary words naturally: ${words.join(', ')}.
-Learner context:
+    preferLite: true,
+    contents: `Create a practical hotel & restaurant waiter sentence-building prompt without level restrictions, ${wordPart}.
+${grammarPart}
+Learner background:
 ${formatLearnerContextBlock(learnerContext)}`,
     responseSchema: {
       type: Type.OBJECT,
@@ -643,16 +1101,23 @@ ${formatLearnerContextBlock(learnerContext)}`,
 
 export async function evaluateSentenceBuilder(params: {
   words: string[];
-  difficulty: string;
+  grammarFocus?: string;
   challengePrompt: string;
   userSentence: string;
   learnerContext?: Partial<LearnerContextSummary> | null;
 }): Promise<SentenceEvaluation> {
+  const normalizedWords = params.words.map((w) => w.trim().toLowerCase()).sort().join(',');
+  const cacheKey = `sent-eval-v1:${(params.grammarFocus || 'free').toLowerCase()}:${normalizedWords}:${params.userSentence
+    .trim()
+    .toLowerCase()}`;
+
   const raw = await generateJsonWithFallback<SentenceEvaluation>({
-    contents: `Evaluate the learner's sentence for the AI Sentence Coach.
-Required words: ${params.words.join(', ')}
-Difficulty: ${params.difficulty}
-Challenge: ${params.challengePrompt}
+    preferLite: true,
+    cacheKey,
+    contents: `Evaluate the learner's English sentence freely (no CEFR level penalty—focus purely on clarity, basic grammar accuracy, and naturalness).
+Target vocabulary words (if any): ${params.words.length ? params.words.join(', ') : 'Free choice'}
+Target basic grammar focus (if any): ${params.grammarFocus || 'Free choice'}
+Prompt/context: ${params.challengePrompt || 'Free sentence writing'}
 User sentence: "${params.userSentence}"
 
 Learner context:
@@ -662,7 +1127,7 @@ IMPORTANT PEDAGOGICAL RULE:
 - Distinguish grammatically valid yet slightly stiff/literal sentences ("verdict": "correct_unnatural", "isCorrect": true) from sentences that genuinely contain grammar or word-usage mistakes ("verdict": "needs_correction", "isCorrect": false), and fluent natural sentences ("verdict": "natural", "isCorrect": true).
 - Evaluate 5 distinct dimensions: grammarAssessment, vocabularyUsageAssessment, sentenceStructureAssessment, contextRelevanceAssessment, naturalnessAssessment.`,
     systemInstruction:
-      'Provide encouraging, linguistically accurate feedback in Indonesian + English examples. Never fail a grammatically correct sentence just because a phrasing is slightly formal or stiff.',
+      'Provide encouraging, simple, clear feedback in Indonesian + English examples. Focus on helping the learner write accurate basic-grammar sentences freely.',
     responseSchema: {
       type: Type.OBJECT,
       properties: {
@@ -701,76 +1166,7 @@ IMPORTANT PEDAGOGICAL RULE:
 }
 
 // ---------------------------------------------------------------------------
-// 5. AI Native Speaker Tutor (5 Teaching Modes, Accent, Speed, Learner Memory)
-// ---------------------------------------------------------------------------
-function getTutorModeInstructions(mode: string): string {
-  switch (mode) {
-    case 'Professional Tutor':
-      return 'Teaching Mode: Professional Tutor. Speak clearly in polished workplace/academic register, give structured explanations of nuances, and coach precision.';
-    case 'Strict Practice':
-      return 'Teaching Mode: Strict Practice. Actively check tense agreement, prepositions, articles, and collocations on every turn, and challenge the learner to self-correct or refine.';
-    case 'Interview Practice':
-      return 'Teaching Mode: Interview Practice. Conduct a realistic English job interview using STAR behavioral and role-fit follow-ups, plus concise executive phrasing upgrades.';
-    case 'Free Speaking':
-      return 'Teaching Mode: Free Speaking. Keep the conversation flowing smoothly WITHOUT interrupting or lecturing in your spoken reply. Store any grammar correction silently in grammarCorrection for post-turn review while replying conversationally.';
-    case 'Friendly Conversation':
-    default:
-      return 'Teaching Mode: Friendly Conversation. Warm, relaxed everyday chat encouraging confidence, natural idioms, and smooth turn-taking.';
-  }
-}
-
-export async function runTutorChatTurn(params: {
-  tutorName: string;
-  accent: string;
-  personality: string;
-  teachingStyle: string;
-  mode: string;
-  speed?: string;
-  level: string;
-  showTranslation: boolean;
-  history: { speaker: string; text: string }[];
-  userMessage: string;
-  learnerContext?: Partial<LearnerContextSummary> | null;
-}) {
-  const transcript = params.history.slice(-8).map((h) => `${h.speaker}: ${h.text}`).join('\n');
-  const speedGuide =
-    params.speed === 'slow'
-      ? 'Use short, crystal-clear sentences and simpler everyday vocabulary so an Indonesian learner practicing at slow pace can follow easily.'
-      : params.speed === 'natural'
-      ? 'Use brisk, idiomatic, native-speed phrasing with connected expressions and authentic nuance.'
-      : 'Use balanced, natural conversational pacing.';
-
-  return generateJsonWithFallback({
-    contents: `Learner memory & context:
-${formatLearnerContextBlock(params.learnerContext)}
-
-Conversation so far:
-${transcript}
-
-Learner: ${params.userMessage}`,
-    systemInstruction: `You are ${params.tutorName}, a native ${params.accent} English tutor.
-Personality: ${params.personality}
-Base style: ${params.teachingStyle}
-${getTutorModeInstructions(params.mode)}
-Pacing: ${speedGuide}
-Target CEFR Level: ${params.level}
-If the learner has weak vocabulary or weak grammar noted in their memory, gently weave opportunities to practice those into your follow-up question when relevant.
-Keep your spoken reply engaging and concise (1-3 sentences + a follow-up question). Provide Indonesian translation, grammarCorrection (empty string if accurate), and naturalAlternative.`,
-    responseSchema: {
-      type: Type.OBJECT,
-      properties: {
-        reply: { type: Type.STRING },
-        translationId: { type: Type.STRING },
-        grammarCorrection: { type: Type.STRING },
-        naturalAlternative: { type: Type.STRING },
-      },
-      required: ['reply', 'translationId', 'grammarCorrection', 'naturalAlternative'],
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// 6. Speaking Partner Live Guidance + Roleplay + Session History Analyzer
+// 5. Speaking Partner Live Guidance + Roleplay + Session History Analyzer
 // ---------------------------------------------------------------------------
 export async function runSimulatorTurn(params: {
   scenarioTitle: string;
@@ -783,13 +1179,14 @@ export async function runSimulatorTurn(params: {
 }) {
   const transcript = params.history.slice(-10).map((h) => `${h.speaker}: ${h.text}`).join('\n');
   return generateJsonWithFallback({
+    preferLite: true,
     contents: `Conversation history:
 ${transcript}
 
 ${params.userRole}: ${params.userMessage}`,
-    systemInstruction: `Roleplay strictly as "${params.aiRole}" in scenario "${params.scenarioTitle}".
-Context: ${params.context}. Learner level: ${params.level}.
-Respond naturally in character (1-3 sentences), plus provide a brief coaching tip and Indonesian translation.`,
+    systemInstruction: `Roleplay strictly as "${params.aiRole}" in a hotel/restaurant service scenario "${params.scenarioTitle}".
+Context: ${params.context}. Learner role: ${params.userRole}.
+Respond naturally in character (1-2 short sentences), plus provide a brief waiter English coaching tip and Indonesian translation.`,
     responseSchema: {
       type: Type.OBJECT,
       properties: {
@@ -809,7 +1206,7 @@ export async function evaluateSimulatorSession(params: {
 }) {
   const transcript = params.history.map((h) => `${h.speaker}: ${h.text}`).join('\n');
   return generateJsonWithFallback({
-    contents: `Evaluate the learner's English performance in this roleplay simulation ("${params.scenarioTitle}", target level ${params.level}):
+    contents: `Evaluate the waiter's hospitality English performance in this hotel/restaurant roleplay ("${params.scenarioTitle}"):
 ${transcript}`,
     responseSchema: {
       type: Type.OBJECT,
@@ -825,43 +1222,176 @@ ${transcript}`,
   });
 }
 
-export async function generateSpeakingGuideScript(topic: string, level: string) {
-  return generateJsonWithFallback({
-    cacheKey: `speak-script:${level}:${topic.toLowerCase()}`,
-    contents: `Create a flexible, natural peer conversation starter script for two English learners (level ${level}) discussing the topic "${topic}".
-Include 4 starter exchanges (Speaker A / B), Indonesian translations, 5 useful vocabulary hints, and 3 quick suggested responses.`,
-    responseSchema: {
-      type: Type.OBJECT,
-      properties: {
-        topic: { type: Type.STRING },
-        starterPrompts: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              speakerRole: { type: Type.STRING },
-              line: { type: Type.STRING },
-              translationId: { type: Type.STRING },
-            },
-            required: ['speakerRole', 'line', 'translationId'],
-          },
-        },
-        vocabularyHints: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              word: { type: Type.STRING },
-              meaningId: { type: Type.STRING },
-            },
-            required: ['word', 'meaningId'],
-          },
-        },
-        suggestedResponses: { type: Type.ARRAY, items: { type: Type.STRING } },
+function buildFallbackWaiterScript(
+  topic: string,
+  cleanWords: { word: string; meaningId?: string }[]
+) {
+  const w1 = cleanWords[0]?.word || 'reservation';
+  const w2 = cleanWords[1]?.word || 'recommend';
+  const w3 = cleanWords[2]?.word || 'beverage';
+  const effectiveTopic =
+    cleanWords.length > 0 && (!topic || topic === 'Vocabulary Focus' || topic === 'Auto')
+      ? `Waiter Service: ${cleanWords.map((w) => w.word).slice(0, 3).join(', ')}`
+      : topic || 'Restaurant Table Service';
+
+  return {
+    topic: effectiveTopic,
+    roleA: 'Waiter',
+    roleB: 'Guest',
+    starterPrompts: [
+      {
+        speakerRole: 'A',
+        line: `Good evening and welcome! May I help you with ${w1} tonight?`,
+        translationId: `Selamat malam dan selamat datang! Ada yang bisa saya bantu terkait ${w1} malam ini?`,
       },
-      required: ['topic', 'starterPrompts', 'vocabularyHints', 'suggestedResponses'],
-    },
-  });
+      {
+        speakerRole: 'B',
+        line: `Thank you. This is our first visit—what would you ${w2} on the menu?`,
+        translationId: `Terima kasih. Ini kunjungan pertama kami—apa yang Anda ${w2} dari menu?`,
+      },
+      {
+        speakerRole: 'A',
+        line: `I would gladly ${w2} our chef's grilled special. Would you also like a ${w3}?`,
+        translationId: `Saya dengan senang hati ${w2} menu panggang spesial chef kami. Apakah Anda juga ingin ${w3}?`,
+      },
+      {
+        speakerRole: 'B',
+        line: `Yes, that sounds wonderful. Let us order that along with fresh juice.`,
+        translationId: `Ya, kedengarannya mantap. Kami pesan itu beserta jus segar.`,
+      },
+      {
+        speakerRole: 'A',
+        line: `Certainly! I will bring your order right away. Please let me know if you need anything else.`,
+        translationId: `Baik! Saya akan segera membawakan pesanan Anda. Silakan beri tahu jika butuh sesuatu.`,
+      },
+      {
+        speakerRole: 'B',
+        line: `Thank you for the attentive service.`,
+        translationId: `Terima kasih atas pelayanan yang sigap.`,
+      },
+    ],
+    vocabularyHints:
+      cleanWords.length > 0
+        ? cleanWords.map((w) => ({
+            word: w.word,
+            meaningId: w.meaningId || 'kosakata layanan restoran',
+          }))
+        : [
+            { word: 'reservation', meaningId: 'reservasi meja' },
+            { word: 'recommend', meaningId: 'merekomendasikan' },
+            { word: 'beverage', meaningId: 'minuman' },
+          ],
+    suggestedResponses: [
+      'Right away, please give me one moment.',
+      'Would you like me to check with the chef?',
+      'Enjoy your meal!',
+    ],
+  };
+}
+
+export async function generateSpeakingGuideScript(
+  topic: string,
+  level: string,
+  targetWords: { word: string; meaningId?: string }[] = []
+) {
+  const cleanWords = targetWords
+    .map((w) => ({
+      word: String(w.word || '').trim(),
+      meaningId: String(w.meaningId || '').trim(),
+    }))
+    .filter((w) => w.word.length > 0)
+    .slice(0, 6);
+
+  const wordsKey = cleanWords.map((w) => w.word.toLowerCase()).sort().join(',');
+  const vocabBlock = cleanWords.length
+    ? `\nTarget vocabulary inputted by the learner (MUST weave EVERY ONE of these words naturally into the waiter/guest dialogue):\n${cleanWords
+        .map((w) => `- ${w.word}${w.meaningId ? ` (${w.meaningId})` : ''}`)
+        .join('\n')}`
+    : '';
+
+  const topicDirective =
+    cleanWords.length && (!topic || topic === 'Vocabulary Focus' || topic === 'Auto')
+      ? 'Create a realistic hotel or restaurant waiter-guest conversation theme title that connects all the target vocabulary words naturally.'
+      : `Hotel/Restaurant conversation theme: "${topic}".`;
+
+  try {
+    const generated = await generateJsonWithFallback<{
+      topic: string;
+      roleA?: string;
+      roleB?: string;
+      starterPrompts: { speakerRole: string; line: string; translationId: string }[];
+      vocabularyHints: { word: string; meaningId: string }[];
+      suggestedResponses: string[];
+    }>({
+      preferLite: true,
+      cacheKey: `speak-script-v4:${level}:${wordsKey}:${topic.toLowerCase()}`,
+      contents: `Create a crisp, step-by-step guided speaking script for two learners practicing HOTEL & RESTAURANT WAITER communication.
+Speaker A is always the "Waiter", and Speaker B is always the "Guest".
+${topicDirective}${vocabBlock}
+Include:
+- "topic": concise hospitality theme title
+- "roleA": "Waiter"
+- "roleB": "Guest"
+- "starterPrompts": exactly 6 alternating exchanges ("A", "B", "A", "B", "A", "B") with clear spoken English and natural Indonesian translation
+- "vocabularyHints": 4-5 helpful hospitality words (word + concise meaningId)
+- "suggestedResponses": 3 quick waiter phrases`,
+      systemInstruction:
+        'Create an orderly, easy-to-read Hotel & Restaurant Waiter vs Guest script in English + Bahasa Indonesia. Use speakerRole "A" (Waiter) and "B" (Guest) strictly alternating. Return strictly JSON.',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          topic: { type: Type.STRING },
+          roleA: { type: Type.STRING },
+          roleB: { type: Type.STRING },
+          starterPrompts: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                speakerRole: { type: Type.STRING },
+                line: { type: Type.STRING },
+                translationId: { type: Type.STRING },
+              },
+              required: ['speakerRole', 'line', 'translationId'],
+            },
+          },
+          vocabularyHints: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                word: { type: Type.STRING },
+                meaningId: { type: Type.STRING },
+              },
+              required: ['word', 'meaningId'],
+            },
+          },
+          suggestedResponses: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ['topic', 'roleA', 'roleB', 'starterPrompts', 'vocabularyHints', 'suggestedResponses'],
+      },
+    });
+
+    if (
+      Array.isArray(generated?.starterPrompts) &&
+      generated.starterPrompts.length >= 4
+    ) {
+      return {
+        ...generated,
+        roleA: generated.roleA || 'Waiter',
+        roleB: generated.roleB || 'Guest',
+        starterPrompts: generated.starterPrompts.slice(0, 6).map((sp, idx) => ({
+          speakerRole: idx % 2 === 0 ? 'A' : 'B',
+          line: String(sp.line || '').trim(),
+          translationId: String(sp.translationId || '').trim(),
+        })),
+      };
+    }
+  } catch (err) {
+    console.warn('[speaking-guide] using deterministic waiter fallback:', err instanceof Error ? err.message : err);
+  }
+
+  return buildFallbackWaiterScript(topic, cleanWords);
 }
 
 export async function adaptSpeakingGuideNext(params: {
@@ -904,10 +1434,14 @@ export async function livePeerGuidance(params: {
   topic: string;
   level: string;
   recentLines: string[];
+  targetWords?: string[];
 }): Promise<PeerLiveGuidance> {
+  const vocabNote = params.targetWords?.length
+    ? `\nTarget vocabulary words to weave in: ${params.targetWords.join(', ')}`
+    : '';
   return generateJsonWithFallback<PeerLiveGuidance>({
     preferLite: true,
-    contents: `Two English learners are speaking live on topic "${params.topic}" (level ${params.level}).
+    contents: `Two English learners are speaking live on topic "${params.topic}" (level ${params.level}).${vocabNote}
 Recent lines:
 ${params.recentLines.slice(-6).join('\n') || 'Session just started.'}
 
@@ -1053,10 +1587,9 @@ const ALLOWED_ROUTES: NavRoute[] = [
   'sentence-builder',
   'listening',
   'pronunciation',
-  'ai-tutor',
   'speaking-community',
   'simulator',
-  'daily-challenge',
+  'schedule',
   'review-vocabulary',
 ];
 
@@ -1256,8 +1789,78 @@ Avoid repeating these recent challenge titles: ${params.recentTitles.join(' | ')
 }
 
 // ---------------------------------------------------------------------------
-// 8. Speech Synthesis (TTS) & Audio Transcription
+// 8. Speech Synthesis (TTS), Audio Transcription & Custom Practice Drills
 // ---------------------------------------------------------------------------
+export async function generateListeningPronunciationDrills(params: {
+  words: string[];
+  level: string;
+}) {
+  const cleanWords = params.words
+    .map((w) => String(w || '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const wordsBlock = cleanWords.length
+    ? `Weave these waiter/hospitality vocabulary words naturally into the drills: ${cleanWords.join(', ')}.`
+    : 'Use practical hotel & restaurant waiter-guest communication phrases.';
+
+  return generateJsonWithFallback<{
+    listeningDrills: {
+      id: string;
+      phrase: string;
+      question: string;
+      options: string[];
+      correctIndex: number;
+    }[];
+    pronunciationDrills: {
+      id: string;
+      level: string;
+      phrase: string;
+      ipa: string;
+      focus: string;
+    }[];
+  }>({
+    preferLite: true,
+    contents: `Create 5 Listening Comprehension drills and 5 Pronunciation & Shadowing drills for an Indonesian hotel & restaurant waiter (Level: ${params.level}).
+${wordsBlock}
+Each listening drill must have 4 options and correctIndex (0..3). Each pronunciation drill must include accurate IPA and a concise pronunciation tip.`,
+    systemInstruction: 'Return strictly valid JSON.',
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        listeningDrills: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              phrase: { type: Type.STRING },
+              question: { type: Type.STRING },
+              options: { type: Type.ARRAY, items: { type: Type.STRING } },
+              correctIndex: { type: Type.INTEGER },
+            },
+            required: ['id', 'phrase', 'question', 'options', 'correctIndex'],
+          },
+        },
+        pronunciationDrills: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING },
+              level: { type: Type.STRING },
+              phrase: { type: Type.STRING },
+              ipa: { type: Type.STRING },
+              focus: { type: Type.STRING },
+            },
+            required: ['id', 'level', 'phrase', 'ipa', 'focus'],
+          },
+        },
+      },
+      required: ['listeningDrills', 'pronunciationDrills'],
+    },
+  });
+}
+
 export async function synthesizeSpeech(text: string, voiceName: string, _accent: string) {
   const clean = text.trim();
   const safeVoice = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Zephyr'].includes(voiceName)
@@ -1267,7 +1870,7 @@ export async function synthesizeSpeech(text: string, voiceName: string, _accent:
   const cached = getCached<string>(cacheKey);
   if (cached) return cached;
 
-  const ai = getAiClient();
+  const ai = getAiClient(6000);
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash-lite-tts',
@@ -1294,30 +1897,86 @@ export async function synthesizeSpeech(text: string, voiceName: string, _accent:
   }
 }
 
+async function transcribeAudioWithGroqWhisper(base64Audio: string, mimeType: string): Promise<string> {
+  const apiKey = getGroqApiKey();
+  if (!apiKey) throw new Error('GROQ_API_KEY is not configured.');
+
+  const cleanMime = (mimeType || 'audio/webm').split(';')[0].trim();
+  const ext = cleanMime.includes('wav')
+    ? 'wav'
+    : cleanMime.includes('mp4') || cleanMime.includes('m4a')
+    ? 'm4a'
+    : cleanMime.includes('mpeg') || cleanMime.includes('mp3')
+    ? 'mp3'
+    : cleanMime.includes('ogg')
+    ? 'ogg'
+    : 'webm';
+
+  const buffer = Buffer.from(base64Audio, 'base64');
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: cleanMime }), `speech.${ext}`);
+  form.append('model', 'whisper-large-v3-turbo');
+  form.append('language', 'en');
+  form.append('response_format', 'json');
+
+  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+    signal: AbortSignal.timeout(15000),
+  });
+
+  const payload = (await response.json().catch(() => ({}))) as {
+    text?: string;
+    error?: { message?: string };
+  };
+  if (!response.ok) {
+    throw formatGroqError(response.status, payload?.error?.message || 'Groq Whisper failed.');
+  }
+  usageStats.requests += 1;
+  return (payload.text || '').trim();
+}
+
 export async function transcribeAndCompareAudio(params: {
   base64Audio: string;
   mimeType: string;
   targetPhrase: string;
   accent: string;
 }) {
-  const ai = getAiClient();
-  const transcribeResponse = await ai.models.generateContent({
-    model: 'gemini-3.5-transcribe',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            mimeType: params.mimeType || 'audio/webm',
-            data: params.base64Audio,
-          },
-        },
-        { text: 'Transcribe this spoken English audio accurately.' },
-      ],
-    },
-  });
-  recordUsage(transcribeResponse);
+  let transcript = '';
 
-  const transcript = (transcribeResponse.text ?? '').trim();
+  if (isGroqConfigured()) {
+    try {
+      transcript = await transcribeAudioWithGroqWhisper(params.base64Audio, params.mimeType);
+    } catch (groqErr) {
+      if (!isGeminiConfigured() || (groqErr as { statusCode?: number })?.statusCode === 401) {
+        throw groqErr;
+      }
+      console.warn('[groq] whisper fallback to Gemini:', groqErr instanceof Error ? groqErr.message : groqErr);
+    }
+  }
+
+  if (!transcript && isGeminiConfigured()) {
+    const ai = getAiClient();
+    const transcribeResponse = await ai.models.generateContent({
+      model: 'gemini-3.5-transcribe',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: params.mimeType || 'audio/webm',
+              data: params.base64Audio,
+            },
+          },
+          { text: 'Transcribe this spoken English audio accurately.' },
+        ],
+      },
+    });
+    recordUsage(transcribeResponse);
+    transcript = (transcribeResponse.text ?? '').trim();
+  }
 
   const comparison = await generateJsonWithFallback<{
     matchPercentage: number;
@@ -1326,6 +1985,7 @@ export async function transcribeAndCompareAudio(params: {
     feedback: string;
     practiceTip: string;
   }>({
+    preferLite: true,
     contents: `Compare the target English phrase against the speech-to-text transcript.
 Target phrase (${params.accent} English): "${params.targetPhrase}"
 Recognized transcript: "${transcript}"

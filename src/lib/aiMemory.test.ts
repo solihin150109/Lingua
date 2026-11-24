@@ -125,7 +125,7 @@ test('buildCompactLearnerContext caps context budgets and surfaces weak areas', 
       {
         id: 'in1',
         userId: 'u1',
-        sourceModule: 'ai-tutor',
+        sourceModule: 'speaking-community',
         mistakeOriginal: 'I go yesterday',
         correction: 'I went yesterday',
         explanation: 'Use V2 for past events',

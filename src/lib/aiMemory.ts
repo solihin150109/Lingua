@@ -10,7 +10,7 @@ import type {
   UserProfile,
   VocabularyItem,
 } from '../types/lingua';
-import { GRAMMAR_TOPICS } from './curriculum';
+import { GRAMMAR_TOPICS } from './curriculum.ts';
 
 /**
  * Normalizes a vocabulary word or phrase for reliable duplicate detection.
@@ -50,7 +50,8 @@ const GRAMMAR_KEYWORD_MAP: Array<{ pattern: RegExp; topicId: string }> = [
   { pattern: /relative clause|who|which|where|whose/i, topicId: 'relative-clauses' },
   { pattern: /gerund|infinitive|enjoy \+ v-ing|look forward to/i, topicId: 'gerunds-and-infinitives' },
   { pattern: /phrasal verb|figure out|go over|look up/i, topicId: 'phrasal-verbs' },
-  { pattern: /modal|could|should|must|might|would/i, topicId: 'modal-verbs' },
+  { pattern: /modal|could|should|must|might|would|may i/i, topicId: 'modal-verbs' },
+  { pattern: /imperative|please |kindly |follow me|take a seat|wait a moment/i, topicId: 'imperatives' },
   { pattern: /article|\ba\/an\b|\bthe\b|an hour|a university/i, topicId: 'articles' },
   { pattern: /preposition|\bin, on, at\b|on monday|at \d/i, topicId: 'prepositions' },
   { pattern: /conjunction|although|however|because/i, topicId: 'conjunctions' },

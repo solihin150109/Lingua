@@ -13,22 +13,24 @@ import {
   evaluateVocabularyPractice,
   generateDailyChallengeAI,
   generateLearningEvaluation,
+  generateListeningPronunciationDrills,
   generatePersonalizedLearningPath,
   generateSentenceChallenge,
   generateSpeakingGuideScript,
   generateVocabularyMaterial,
+  getActiveTextProvider,
   getUsageStats,
   isGeminiConfigured,
+  isGroqConfigured,
   livePeerGuidance,
   runSimulatorTurn,
-  runTutorChatTurn,
   streamPersonalAssistant,
   summarizeSpeakingSession,
   synthesizeSpeech,
   transcribeAndCompareAudio,
   transformGrammarSentence,
-} from './server/gemini';
-import { attachWebSocketHub } from './server/wsHub';
+} from './server/gemini.ts';
+import { attachWebSocketHub } from './server/wsHub.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,7 +51,9 @@ async function bootstrap() {
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
+      groqConfigured: isGroqConfigured(),
       geminiConfigured: isGeminiConfigured(),
+      activeTextProvider: getActiveTextProvider(),
       webrtcSignaling: true,
       usage: getUsageStats(),
     });
@@ -119,7 +123,8 @@ async function bootstrap() {
       const data = await generateVocabularyMaterial(word, level);
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to generate vocabulary material.',
       });
     }
@@ -144,7 +149,8 @@ async function bootstrap() {
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Vocabulary assistant failed.',
       });
     }
@@ -165,7 +171,8 @@ async function bootstrap() {
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to evaluate vocabulary practice.',
       });
     }
@@ -188,7 +195,8 @@ async function bootstrap() {
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to analyze grammar sentence.',
       });
     }
@@ -210,27 +218,32 @@ async function bootstrap() {
       const data = await transformGrammarSentence({ sentence, action, targetTense, level });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to transform sentence.',
       });
     }
   });
 
   // ------------------------------------------------------------------
-  // 4. AI Sentence Coach
+  // 4. AI Sentence Coach (Level-Free)
   // ------------------------------------------------------------------
   app.post('/api/ai/sentence-builder/challenge', async (req, res) => {
     try {
       const words = Array.isArray(req.body?.words) ? req.body.words.map(String).slice(0, 5) : [];
-      const difficulty = String(req.body?.difficulty || 'Intermediate').slice(0, 40);
-      if (words.length === 0) {
-        return res.status(400).json({ error: 'Select at least one vocabulary word.' });
-      }
-      const data = await generateSentenceChallenge(words, difficulty, req.body?.learnerContext || null);
+      const grammarFocus = req.body?.grammarFocus
+        ? String(req.body.grammarFocus).slice(0, 60)
+        : undefined;
+      const data = await generateSentenceChallenge(
+        words,
+        grammarFocus,
+        req.body?.learnerContext || null
+      );
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to generate sentence challenge.',
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
+        error: error instanceof Error ? error.message : 'Failed to generate sentence prompt.',
       });
     }
   });
@@ -238,7 +251,9 @@ async function bootstrap() {
   app.post('/api/ai/sentence-builder/evaluate', async (req, res) => {
     try {
       const words = Array.isArray(req.body?.words) ? req.body.words.map(String).slice(0, 5) : [];
-      const difficulty = String(req.body?.difficulty || 'Intermediate').slice(0, 40);
+      const grammarFocus = req.body?.grammarFocus
+        ? String(req.body.grammarFocus).slice(0, 60)
+        : undefined;
       const challengePrompt = String(req.body?.challengePrompt || '').slice(0, 400);
       const userSentence = String(req.body?.userSentence || '').trim().slice(0, 600);
       if (!userSentence) {
@@ -246,61 +261,23 @@ async function bootstrap() {
       }
       const data = await evaluateSentenceBuilder({
         words,
-        difficulty,
+        grammarFocus,
         challengePrompt,
         userSentence,
         learnerContext: req.body?.learnerContext || null,
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to evaluate sentence.',
       });
     }
   });
 
   // ------------------------------------------------------------------
-  // 5. AI Native Tutor & Simulator & Speaking Community
+  // 5. Roleplay Simulator & Speaking Community
   // ------------------------------------------------------------------
-  app.post('/api/ai/tutor/chat', async (req, res) => {
-    try {
-      const {
-        tutorName,
-        accent,
-        personality,
-        teachingStyle,
-        mode,
-        speed,
-        level,
-        showTranslation,
-        history,
-        userMessage,
-        learnerContext,
-      } = req.body || {};
-      if (!userMessage) {
-        return res.status(400).json({ error: 'Message is required.' });
-      }
-      const data = await runTutorChatTurn({
-        tutorName: String(tutorName || 'Emma').slice(0, 60),
-        accent: String(accent || 'American').slice(0, 20),
-        personality: String(personality || 'Warm and encouraging').slice(0, 200),
-        teachingStyle: String(teachingStyle || 'Conversational').slice(0, 200),
-        mode: String(mode || 'Friendly Conversation').slice(0, 60),
-        speed: String(speed || 'normal').slice(0, 20),
-        level: String(level || 'B1-B2').slice(0, 20),
-        showTranslation: Boolean(showTranslation),
-        history: Array.isArray(history) ? history.slice(-10) : [],
-        userMessage: String(userMessage).slice(0, 800),
-        learnerContext: learnerContext || null,
-      });
-      return res.json(data);
-    } catch (error) {
-      return res.status(500).json({
-        error: error instanceof Error ? error.message : 'Failed to reach AI Native Tutor.',
-      });
-    }
-  });
-
   app.post('/api/ai/simulator/turn', async (req, res) => {
     try {
       const { scenarioTitle, aiRole, userRole, context, level, history, userMessage } = req.body || {};
@@ -318,7 +295,8 @@ async function bootstrap() {
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to continue simulation.',
       });
     }
@@ -334,7 +312,8 @@ async function bootstrap() {
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to evaluate simulation.',
       });
     }
@@ -342,12 +321,29 @@ async function bootstrap() {
 
   app.post('/api/ai/speaking-guide/script', async (req, res) => {
     try {
-      const topic = String(req.body?.topic || 'Introduction');
-      const level = String(req.body?.level || 'B1-B2');
-      const data = await generateSpeakingGuideScript(topic, level);
+      const topic = String(req.body?.topic || 'Vocabulary Focus').slice(0, 120);
+      const level = String(req.body?.level || 'B1-B2').slice(0, 20);
+      const rawWords = Array.isArray(req.body?.targetWords) ? req.body.targetWords : [];
+      const targetWords = rawWords
+        .slice(0, 6)
+        .map((item: unknown) => {
+          if (typeof item === 'string') return { word: item.slice(0, 60) };
+          if (item && typeof item === 'object') {
+            const obj = item as Record<string, unknown>;
+            return {
+              word: String(obj.word || '').slice(0, 60),
+              meaningId: String(obj.meaningId || '').slice(0, 120),
+            };
+          }
+          return { word: '' };
+        })
+        .filter((w: { word: string }) => w.word.trim().length > 0);
+
+      const data = await generateSpeakingGuideScript(topic, level, targetWords);
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to generate conversation guide.',
       });
     }
@@ -362,7 +358,8 @@ async function bootstrap() {
       const data = await adaptSpeakingGuideNext({ topic, mode, level, recentLines });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to adapt conversation guide.',
       });
     }
@@ -370,15 +367,19 @@ async function bootstrap() {
 
   app.post('/api/ai/speaking-guide/live-guidance', async (req, res) => {
     try {
-      const topic = String(req.body?.topic || 'Free Discussion').slice(0, 80);
+      const topic = String(req.body?.topic || 'Free Discussion').slice(0, 120);
       const level = String(req.body?.level || 'B1-B2').slice(0, 20);
       const recentLines = Array.isArray(req.body?.recentLines)
         ? req.body.recentLines.map((l: unknown) => String(l).slice(0, 240)).slice(-8)
         : [];
-      const data = await livePeerGuidance({ topic, level, recentLines });
+      const targetWords = Array.isArray(req.body?.targetWords)
+        ? req.body.targetWords.map((w: unknown) => String(w).slice(0, 60)).slice(0, 6)
+        : [];
+      const data = await livePeerGuidance({ topic, level, recentLines, targetWords });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Live speaking guidance failed.',
       });
     }
@@ -392,7 +393,8 @@ async function bootstrap() {
       const data = await summarizeSpeakingSession({ topic, durationSeconds, transcript });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Failed to generate speaking summary.',
       });
     }
@@ -443,8 +445,22 @@ async function bootstrap() {
   });
 
   // ------------------------------------------------------------------
-  // 7. TTS & Transcribe
+  // 7. TTS, Transcribe & Custom Drills
   // ------------------------------------------------------------------
+  app.post('/api/ai/drills/generate', async (req, res) => {
+    try {
+      const words = Array.isArray(req.body?.words) ? req.body.words.map(String).slice(0, 6) : [];
+      const level = String(req.body?.level || 'B1-B2').slice(0, 20);
+      const data = await generateListeningPronunciationDrills({ words, level });
+      return res.json(data);
+    } catch (error) {
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
+        error: error instanceof Error ? error.message : 'Failed to generate listening & pronunciation drills.',
+      });
+    }
+  });
+
   app.post('/api/ai/tts', async (req, res) => {
     try {
       const text = String(req.body?.text || '').trim();
@@ -456,7 +472,8 @@ async function bootstrap() {
       const audioBase64 = await synthesizeSpeech(text, voiceName, accent);
       return res.json({ audioBase64, mimeType: 'audio/wav' });
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Speech synthesis failed.',
       });
     }
@@ -476,7 +493,8 @@ async function bootstrap() {
       });
       return res.json(data);
     } catch (error) {
-      return res.status(500).json({
+      const status = (error as { statusCode?: number }).statusCode || 500;
+      return res.status(status).json({
         error: error instanceof Error ? error.message : 'Audio transcription failed.',
       });
     }

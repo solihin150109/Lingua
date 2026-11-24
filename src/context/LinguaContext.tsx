@@ -45,8 +45,14 @@ import {
   findDuplicateVocabulary,
   getGrammarTopicTitle,
 } from '../lib/aiMemory';
+import {
+  clearLoginSeed,
+  getOrCreateLoginSeed,
+  rotateLoginSeed,
+} from '../lib/hospitalityBanks';
 import type {
   AchievementUnlock,
+  ActiveScheduleReminder,
   AiDailyChallenge,
   DailyChallengeProgress,
   EnglishAccent,
@@ -63,6 +69,7 @@ import type {
   QuizResult,
   SpeakingSession,
   SpeakingSpeed,
+  StudyScheduleItem,
   TranscriptEntry,
   TutorPreference,
   UserAccount,
@@ -92,6 +99,8 @@ interface LinguaContextValue {
   setGlobalSearch: (q: string) => void;
   darkMode: boolean;
   toggleDarkMode: () => void;
+  quizSessionSeed: string;
+  rotateQuizSessionSeed: () => void;
 
   account: UserAccount | null;
   profile: UserProfile | null;
@@ -108,14 +117,37 @@ interface LinguaContextValue {
   learningInsights: LearningInsight[];
   learnerMemory: LearnerMemoryDoc | null;
   learnerContext: LearnerContextSummary;
-  serverHealth: { ok: boolean; geminiConfigured: boolean; webrtcSignaling: boolean } | null;
+  serverHealth: {
+    ok: boolean;
+    groqConfigured?: boolean;
+    geminiConfigured: boolean;
+    activeTextProvider?: 'groq' | 'gemini' | 'none';
+    webrtcSignaling: boolean;
+  } | null;
 
   focusedGrammarTopicId: string | null;
   setFocusedGrammarTopicId: (id: string | null) => void;
   focusedVocabId: string | null;
   setFocusedVocabId: (id: string | null) => void;
+  focusedSentenceWord: string | null;
+  setFocusedSentenceWord: (word: string | null) => void;
+  focusedSentenceGrammar: string | null;
+  setFocusedSentenceGrammar: (grammar: string | null) => void;
   navigateToGrammarTopic: (topicId: string) => void;
   navigateToVocabPractice: (vocabId: string) => void;
+  navigateToSentenceBuilder: (word?: string, basicGrammar?: string) => void;
+
+  studySchedules: StudyScheduleItem[];
+  activeScheduleReminder: ActiveScheduleReminder | null;
+  dismissScheduleReminder: () => void;
+  browserNotifPermission: NotificationPermission | 'unsupported';
+  requestBrowserNotificationPermission: () => Promise<NotificationPermission | 'unsupported'>;
+  addStudySchedule: (
+    input: Omit<StudyScheduleItem, 'id' | 'createdAt' | 'lastTriggeredDateKey'>
+  ) => StudyScheduleItem;
+  toggleStudySchedule: (id: string) => void;
+  deleteStudySchedule: (id: string) => void;
+  testScheduleNotification: (schedule?: StudyScheduleItem) => Promise<void>;
 
   assistantOpen: boolean;
   setAssistantOpen: (open: boolean) => void;
@@ -133,6 +165,7 @@ interface LinguaContextValue {
   updateUserProfile: (patch: Partial<UserProfile>) => Promise<void>;
   grantAudioConsent: (granted: boolean) => Promise<void>;
   addVocabularyWithAI: (word: string) => Promise<VocabularyItem>;
+  repairVocabularySentences: (vocab: VocabularyItem) => Promise<number>;
   saveWordFromAnywhere: (word: string) => Promise<{ item: VocabularyItem; existed: boolean }>;
   toggleFavoriteVocab: (vocabId: string) => Promise<void>;
   deleteVocabulary: (vocabId: string) => Promise<void>;
@@ -215,6 +248,14 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
   const [activeRoute, setActiveRoute] = useState<NavRoute>('dashboard');
   const [globalSearch, setGlobalSearch] = useState('');
   const [darkMode, setDarkMode] = useState(false);
+  const [quizSessionSeed, setQuizSessionSeed] = useState<string>(() =>
+    getOrCreateLoginSeed(isAutostart ? 'preview' : 'guest')
+  );
+
+  const rotateQuizSessionSeed = useCallback(() => {
+    const uid = firebaseUser?.uid || (isPreviewMode ? 'preview' : 'guest');
+    setQuizSessionSeed(rotateLoginSeed(uid));
+  }, [firebaseUser, isPreviewMode]);
 
   const [account, setAccount] = useState<UserAccount | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -232,11 +273,25 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
   const [learnerMemory, setLearnerMemory] = useState<LearnerMemoryDoc | null>(null);
   const [focusedGrammarTopicId, setFocusedGrammarTopicId] = useState<string | null>(null);
   const [focusedVocabId, setFocusedVocabId] = useState<string | null>(null);
+  const [focusedSentenceWord, setFocusedSentenceWord] = useState<string | null>(null);
+  const [focusedSentenceGrammar, setFocusedSentenceGrammar] = useState<string | null>(null);
+  const [studySchedules, setStudySchedules] = useState<StudyScheduleItem[]>([]);
+  const [activeScheduleReminder, setActiveScheduleReminder] =
+    useState<ActiveScheduleReminder | null>(null);
+  const [browserNotifPermission, setBrowserNotifPermission] = useState<
+    NotificationPermission | 'unsupported'
+  >(() =>
+    typeof window !== 'undefined' && 'Notification' in window
+      ? window.Notification.permission
+      : 'unsupported'
+  );
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantInitialPrompt, setAssistantInitialPrompt] = useState('');
   const [serverHealth, setServerHealth] = useState<{
     ok: boolean;
+    groqConfigured?: boolean;
     geminiConfigured: boolean;
+    activeTextProvider?: 'groq' | 'gemini' | 'none';
     webrtcSignaling: boolean;
   } | null>(null);
   const [isSpeakingAudio, setIsSpeakingAudio] = useState(false);
@@ -263,6 +318,12 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
     setActiveRoute('vocabulary');
   }, []);
 
+  const navigateToSentenceBuilder = useCallback((word?: string, basicGrammar?: string) => {
+    setFocusedSentenceWord(word ?? null);
+    setFocusedSentenceGrammar(basicGrammar ?? null);
+    setActiveRoute('sentence-builder');
+  }, []);
+
   const openAssistantWithPrompt = useCallback((prompt?: string) => {
     setAssistantInitialPrompt(prompt || '');
     setAssistantOpen(true);
@@ -274,7 +335,15 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
     fetch('/api/health')
       .then((r) => r.json())
       .then((d) => setServerHealth(d))
-      .catch(() => setServerHealth({ ok: false, geminiConfigured: false, webrtcSignaling: false }));
+      .catch(() =>
+        setServerHealth({
+          ok: false,
+          groqConfigured: false,
+          geminiConfigured: false,
+          activeTextProvider: 'none',
+          webrtcSignaling: false,
+        })
+      );
   }, []);
 
   // Seed preview workspace ONLY when explicitly in Preview Mode (?autostart=1 or user clicks preview)
@@ -293,7 +362,7 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       uid: 'preview',
       displayName: 'Alex Pratama',
       level: 'B1-B2',
-      learningGoals: 'Speak confidently in international meetings and daily conversations.',
+      learningGoals: 'Melayani tamu hotel & restoran dengan bahasa Inggris yang sopan dan jelas.',
       preferredAccent: 'American',
       dailyTargetMinutes: 25,
       streakDays: 4,
@@ -309,7 +378,7 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       grammarCompleted: 2,
       speakingMinutes: 14,
       lastModule: 'vocabulary',
-      lastLessonTitle: 'Vocabulary: improve',
+      lastLessonTitle: 'Vocabulary: recommend',
       weeklyMinutes: [15, 22, 18, 25, 12, 30, 14],
       updatedAt: now,
     });
@@ -325,8 +394,8 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
     });
     setLearnerMemory({
       userId: 'preview',
-      grammarWeaknesses: ['Simple Past', 'Present Perfect'],
-      weakVocabWords: ['improve'],
+      grammarWeaknesses: ['Modal Verbs', 'Simple Past'],
+      weakVocabWords: ['recommend'],
       recentSessionSummaries: [],
       pronunciationSamplesCount: 0,
       pronunciationAvgMatch: 0,
@@ -336,12 +405,12 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       {
         id: 'insight-preview-1',
         userId: 'preview',
-        sourceModule: 'ai-tutor',
-        mistakeOriginal: 'Yesterday I go to the client office.',
-        correction: 'Yesterday I went to the client office.',
-        explanation: 'Completed past time marker "Yesterday" requires Simple Past (went).',
-        grammarTopicId: 'simple-past',
-        vocabWord: '',
+        sourceModule: 'speaking-community',
+        mistakeOriginal: 'Wait, I bring you menu.',
+        correction: 'Right away, let me bring you the menu.',
+        explanation: 'Gunakan ungkapan sopan waiter dengan modal/imperative halus saat melayani tamu.',
+        grammarTopicId: 'modal-verbs',
+        vocabWord: 'recommend',
         createdAt: now,
       },
     ]);
@@ -349,21 +418,21 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       {
         id: 'notif-welcome',
         userId: 'preview',
-        type: 'challenge',
-        title: 'Daily Challenge Ready',
-        body: getTodayChallenge().title,
+        type: 'reminder',
+        title: 'Siap Latihan Waiter Hotel & Restoran?',
+        body: 'Tambah kosakata waiter untuk melihat kalimat 7 Grammar Dasar, atau kerjakan 30 soal latihan sesi ini.',
         read: false,
-        actionRoute: 'daily-challenge',
+        actionRoute: 'vocabulary',
         createdAt: now,
       },
       {
         id: 'notif-review',
         userId: 'preview',
         type: 'review',
-        title: '1 Vocabulary Word Due for Review',
-        body: 'Review "improve" to strengthen long-term recall.',
+        title: 'Latihan Speaking Waiter Terstruktur',
+        body: 'Buka Call Partner untuk praktik dialog Waiter & Tamu dengan script tersinkron.',
         read: false,
-        actionRoute: 'review-vocabulary',
+        actionRoute: 'speaking-community',
         createdAt: now,
       },
     ]);
@@ -384,6 +453,9 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       if (user) {
         setIsPreviewMode(false);
         const uid = user.uid;
+        if (user.emailVerified) {
+          setQuizSessionSeed(getOrCreateLoginSeed(uid));
+        }
         try {
           const userDocRef = doc(db, 'users', uid);
           const userSnap = await getDoc(userDocRef);
@@ -407,7 +479,7 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
               displayName: clampString(user.displayName || user.email?.split('@')[0] || 'Learner', 80),
               photoURL: clampString(user.photoURL || '', 512),
               level: 'B1-B2',
-              learningGoals: 'Build daily speaking confidence and expand active vocabulary.',
+              learningGoals: 'Serve hotel and restaurant guests confidently in polite English.',
               preferredAccent: 'American',
               dailyTargetMinutes: 20,
               streakDays: 1,
@@ -838,6 +910,7 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
   }, [firebaseUser, isPreviewMode]);
 
   const enterPreviewMode = useCallback(() => {
+    setQuizSessionSeed(rotateLoginSeed('preview'));
     setIsPreviewMode(true);
     setAuthError(null);
   }, []);
@@ -848,7 +921,20 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Google Sign-In failed.');
+      const msg = error instanceof Error ? error.message : String(error);
+      const projectId = auth.app.options.projectId;
+      if (msg.includes('unauthorized-domain')) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+        setAuthError(
+          `Domain "${host}" is not authorized in Firebase Auth for project "${projectId}". Add it in Firebase Console > Authentication > Settings > Authorized domains, or use Preview Workspace.`
+        );
+      } else if (msg.includes('popup-blocked')) {
+        setAuthError('Browser blocked the Google Sign-In popup. Please allow popups for this site and try again.');
+      } else if (msg.includes('popup-closed-by-user')) {
+        setAuthError('Google Sign-In popup was closed before completing sign-in.');
+      } else {
+        setAuthError(msg || 'Google Sign-In failed.');
+      }
     }
   }, []);
 
@@ -863,9 +949,10 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      const projectId = auth.app.options.projectId;
       if (msg.includes('operation-not-allowed')) {
         setAuthError(
-          'Email/Password sign-in is not yet enabled in Firebase Console (Authentication > Sign-in method). Use Google Sign-In or enable Email/Password in Firebase Console.'
+          `Email/Password sign-in is not yet enabled in Firebase Console (Project: ${projectId} > Authentication > Sign-in method > Email/Password). You can sign in immediately with Google Sign-In.`
         );
       } else {
         setAuthError(msg);
@@ -882,9 +969,10 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       setAuthError('Account created! Please check your email inbox to verify your email address, or sign in with Google.');
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      const projectId = auth.app.options.projectId;
       if (msg.includes('operation-not-allowed')) {
         setAuthError(
-          'Email/Password registration requires enabling the Email/Password provider in Firebase Console (Authentication > Sign-in method). You can sign in immediately with Google Sign-In.'
+          `Email/Password registration is not yet enabled in Firebase Console (Project: ${projectId} > Authentication > Sign-in method > Email/Password). You can sign in immediately with Google Sign-In.`
         );
       } else {
         setAuthError(msg);
@@ -913,6 +1001,7 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
         // Ignore offline update on signout
       }
     }
+    clearLoginSeed(firebaseUser?.uid || 'preview');
     setIsPreviewMode(false);
     setAccount(null);
     setProfile(null);
@@ -961,75 +1050,221 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
   );
 
   const checkAndUnlockAchievements = useCallback(
-    async (override?: Partial<{ vocabTotal: number; vocabMastered: number; grammarCompleted: number; speakingMinutes: number; streakDays: number; sentenceBuilderCount: number }>) => {
-      const stats = {
-        vocabTotal: override?.vocabTotal ?? vocabulary.length,
-        vocabMastered:
-          override?.vocabMastered ?? vocabulary.filter((v) => v.masteryStatus === 'Mastered').length,
-        grammarCompleted:
-          override?.grammarCompleted ?? grammarProgress.filter((g) => g.completed).length,
-        speakingMinutes: override?.speakingMinutes ?? (progress?.speakingMinutes || 0),
-        streakDays: override?.streakDays ?? (profile?.streakDays || 1),
-        sentenceBuilderCount:
-          override?.sentenceBuilderCount ??
-          quizResults.filter((q) => q.quizType === 'sentence-builder').length,
-      };
-      const unlockedKeys = computeUnlockedAchievementKeys(stats);
-      const existingKeys = new Set(achievements.map((a) => a.badgeKey));
+    async (_override?: Partial<{ vocabTotal: number; vocabMastered: number; grammarCompleted: number; speakingMinutes: number; streakDays: number; sentenceBuilderCount: number }>) => {
+      // Achievements disabled per workspace focus (Vocabulary, Basic Grammar Sentences, Script Speaking)
+      void ACHIEVEMENT_BADGES;
+      void computeUnlockedAchievementKeys;
+    },
+    []
+  );
 
-      for (const key of unlockedKeys) {
-        if (!existingKeys.has(key)) {
-          const badge = ACHIEVEMENT_BADGES.find((b) => b.key === key);
-          if (!badge) continue;
-          const uid = firebaseUser?.uid || 'preview';
-          const id = `${uid}_${key}`;
-          if (canWriteFirestore) {
-            try {
-              await setDoc(doc(db, 'achievements', id), {
-                id,
-                userId: uid,
-                badgeKey: key,
-                title: clampString(badge.title, 100),
-                description: clampString(badge.description, 240),
-                unlockedAt: serverTimestamp(),
-              });
-            } catch (err) {
-              handleFirestoreError(err, OperationType.CREATE, `achievements/${id}`);
-            }
-          } else {
-            setAchievements((prev) => [
-              ...prev,
-              {
-                id,
-                userId: uid,
-                badgeKey: key,
-                title: badge.title,
-                description: badge.description,
-                unlockedAt: new Date().toISOString(),
-              },
-            ]);
-          }
-          await pushNotification(
-            'achievement',
-            `Achievement Unlocked: ${badge.title}`,
-            badge.description,
-            'achievements'
+  // ------------------------------------------------------------------
+  // Study Schedule Persistence & Real-Time Notification Trigger
+  // ------------------------------------------------------------------
+  const scheduleStorageKey = `lingua_study_schedules_${firebaseUser?.uid || 'preview'}`;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(scheduleStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setStudySchedules(
+            parsed.map((item) => ({
+              ...item,
+              focusArea:
+                (item?.focusArea as string) === 'ai-tutor'
+                  ? 'speaking-community'
+                  : item?.focusArea || 'vocabulary',
+            }))
           );
+          return;
+        }
+      }
+      setStudySchedules([]);
+    } catch {
+      setStudySchedules([]);
+    }
+  }, [scheduleStorageKey]);
+
+  const persistStudySchedules = useCallback(
+    (next: StudyScheduleItem[]) => {
+      setStudySchedules(next);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(scheduleStorageKey, JSON.stringify(next));
+        } catch {
+          // Ignore storage quota error
         }
       }
     },
-    [
-      achievements,
-      canWriteFirestore,
-      firebaseUser,
-      grammarProgress,
-      profile,
-      progress,
-      pushNotification,
-      quizResults,
-      vocabulary,
-    ]
+    [scheduleStorageKey]
   );
+
+  const playReminderChime = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      [523.25, 659.25].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + idx * 0.14);
+        gain.gain.setValueAtTime(0.08, now + idx * 0.14);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.14 + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + idx * 0.14);
+        osc.stop(now + idx * 0.14 + 0.38);
+      });
+    } catch {
+      // Ignore Web Audio restriction before interaction
+    }
+  }, []);
+
+  const requestBrowserNotificationPermission = useCallback(async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setBrowserNotifPermission('unsupported');
+      return 'unsupported' as const;
+    }
+    try {
+      const perm = await window.Notification.requestPermission();
+      setBrowserNotifPermission(perm);
+      return perm;
+    } catch {
+      setBrowserNotifPermission(window.Notification.permission);
+      return window.Notification.permission;
+    }
+  }, []);
+
+  const dispatchScheduleReminder = useCallback(
+    async (item: StudyScheduleItem, isTest = false) => {
+      const title = isTest
+        ? `Tes Pengingat: ${item.title}`
+        : `Waktunya Belajar: ${item.title}`;
+      const body = item.note
+        ? `${item.note} (${item.timeHHMM})`
+        : `Jadwal belajar pukul ${item.timeHHMM} siap dimulai.`;
+
+      setActiveScheduleReminder({
+        id: item.id,
+        title,
+        focusArea: item.focusArea,
+        timeHHMM: item.timeHHMM,
+        note: body,
+      });
+      playReminderChime();
+
+      await pushNotification('reminder', title, body, item.focusArea);
+
+      if (
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        window.Notification.permission === 'granted'
+      ) {
+        try {
+          new window.Notification(title, { body });
+        } catch {
+          // Some embedded iframes restrict Notification constructor
+        }
+      }
+    },
+    [playReminderChime, pushNotification]
+  );
+
+  const addStudySchedule = useCallback(
+    (input: Omit<StudyScheduleItem, 'id' | 'createdAt' | 'lastTriggeredDateKey'>) => {
+      const created: StudyScheduleItem = {
+        ...input,
+        id: makeId('sched'),
+        createdAt: new Date().toISOString(),
+      };
+      persistStudySchedules([created, ...studySchedules]);
+      return created;
+    },
+    [persistStudySchedules, studySchedules]
+  );
+
+  const toggleStudySchedule = useCallback(
+    (id: string) => {
+      persistStudySchedules(
+        studySchedules.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s))
+      );
+    },
+    [persistStudySchedules, studySchedules]
+  );
+
+  const deleteStudySchedule = useCallback(
+    (id: string) => {
+      persistStudySchedules(studySchedules.filter((s) => s.id !== id));
+    },
+    [persistStudySchedules, studySchedules]
+  );
+
+  const testScheduleNotification = useCallback(
+    async (schedule?: StudyScheduleItem) => {
+      const target: StudyScheduleItem = schedule || {
+        id: 'test',
+        title: 'Latihan Vocabulary & Speaking',
+        focusArea: 'vocabulary',
+        timeHHMM: `${String(new Date().getHours()).padStart(2, '0')}:${String(
+          new Date().getMinutes()
+        ).padStart(2, '0')}`,
+        days: [],
+        enabled: true,
+        note: 'Kumpulkan kosakata baru & buat kalimat dengan grammar dasar.',
+        createdAt: new Date().toISOString(),
+      };
+      await dispatchScheduleReminder(target, true);
+    },
+    [dispatchScheduleReminder]
+  );
+
+  const dismissScheduleReminder = useCallback(() => setActiveScheduleReminder(null), []);
+
+  useEffect(() => {
+    if (!profile && !isPreviewMode) return;
+
+    const checkDueSchedules = () => {
+      if (studySchedules.length === 0) return;
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(
+        2,
+        '0'
+      )}`;
+      const dateMinuteKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+        2,
+        '0'
+      )}-${String(now.getDate()).padStart(2, '0')} ${hhmm}`;
+
+      let changed = false;
+      const updated = studySchedules.map((sched) => {
+        if (!sched.enabled) return sched;
+        const dayMatches = sched.days.length === 0 || sched.days.includes(dayOfWeek);
+        if (dayMatches && sched.timeHHMM === hhmm && sched.lastTriggeredDateKey !== dateMinuteKey) {
+          changed = true;
+          void dispatchScheduleReminder(sched, false);
+          return { ...sched, lastTriggeredDateKey: dateMinuteKey };
+        }
+        return sched;
+      });
+
+      if (changed) {
+        persistStudySchedules(updated);
+      }
+    };
+
+    checkDueSchedules();
+    const timer = window.setInterval(checkDueSchedules, 15000);
+    return () => window.clearInterval(timer);
+  }, [dispatchScheduleReminder, isPreviewMode, persistStudySchedules, profile, studySchedules]);
 
   const completeOnboarding = useCallback(
     async (payload: {
@@ -1266,6 +1501,72 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       updateUserProfile,
       vocabulary,
     ]
+  );
+
+  const repairVocabularySentences = useCallback(
+    async (vocab: VocabularyItem): Promise<number> => {
+      const res = await fetch('/api/ai/vocabulary/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word: vocab.word, level: profile?.level || 'B1-B2' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Gagal melengkapi kalimat 7 grammar dasar.');
+      }
+
+      const existingSentences = sentences.filter((s) => s.vocabId === vocab.id);
+      const rawSentences = Array.isArray(data.sentences) ? data.sentences : [];
+      const missingRaw = rawSentences.filter(
+        (cand: Record<string, string>) =>
+          !existingSentences.some(
+            (ex) =>
+              ex.tense.toLowerCase().includes(String(cand.tense || '').toLowerCase()) ||
+              String(cand.tense || '').toLowerCase().includes(ex.tense.toLowerCase())
+          )
+      );
+
+      if (missingRaw.length === 0) return 0;
+
+      const uid = firebaseUser?.uid || 'preview';
+      const nowIso = new Date().toISOString();
+      const created: VocabularySentence[] = missingRaw.map((s: Record<string, string>) => ({
+        id: makeId('sent'),
+        userId: uid,
+        vocabId: vocab.id,
+        tense: clampString(s.tense, 80),
+        sentence: clampString(s.sentence, 300),
+        translationId: clampString(s.translationId, 300),
+        formula: clampString(s.formula, 160),
+        subject: clampString(s.subject, 80),
+        verb: clampString(s.verb, 80),
+        objectComplement: clampString(s.objectComplement, 160),
+        structureReason: clampString(s.structureReason, 400),
+        dailyUsage: clampString(s.dailyUsage, 400),
+        affirmative: clampString(s.affirmative, 300),
+        negative: clampString(s.negative, 300),
+        interrogative: clampString(s.interrogative, 300),
+        createdAt: nowIso,
+      }));
+
+      if (canWriteFirestore) {
+        try {
+          for (const sent of created) {
+            await setDoc(doc(db, 'vocabularySentences', sent.id), {
+              ...sent,
+              createdAt: serverTimestamp(),
+            });
+          }
+        } catch (err) {
+          handleFirestoreError(err, OperationType.CREATE, 'vocabularySentences');
+        }
+      } else {
+        setSentences((prev) => [...created, ...prev]);
+      }
+
+      return created.length;
+    },
+    [canWriteFirestore, firebaseUser, profile, sentences]
   );
 
   const saveWordFromAnywhere = useCallback(
@@ -1917,17 +2218,24 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
         setIsSpeakingAudio(true);
         let base64 = ttsCacheRef.current.get(cacheKey);
         if (!base64) {
-          const res = await fetch('/api/ai/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: clean, accent: chosenAccent, voiceName: chosenVoice }),
-          });
-          const data = await res.json();
-          if (!res.ok || !data.audioBase64) {
-            throw new Error(data.error || 'TTS failed');
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(() => controller.abort(), 2800);
+          try {
+            const res = await fetch('/api/ai/tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: clean, accent: chosenAccent, voiceName: chosenVoice }),
+              signal: controller.signal,
+            });
+            const data = await res.json();
+            if (!res.ok || !data.audioBase64) {
+              throw new Error(data.error || 'TTS failed');
+            }
+            base64 = data.audioBase64;
+            if (base64) ttsCacheRef.current.set(cacheKey, base64);
+          } finally {
+            window.clearTimeout(timeoutId);
           }
-          base64 = data.audioBase64;
-          if (base64) ttsCacheRef.current.set(cacheKey, base64);
         }
 
         if (audioElRef.current) {
@@ -2000,6 +2308,8 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       setGlobalSearch,
       darkMode,
       toggleDarkMode,
+      quizSessionSeed,
+      rotateQuizSessionSeed,
       account,
       profile,
       progress,
@@ -2020,8 +2330,22 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       setFocusedGrammarTopicId,
       focusedVocabId,
       setFocusedVocabId,
+      focusedSentenceWord,
+      setFocusedSentenceWord,
+      focusedSentenceGrammar,
+      setFocusedSentenceGrammar,
       navigateToGrammarTopic,
       navigateToVocabPractice,
+      navigateToSentenceBuilder,
+      studySchedules,
+      activeScheduleReminder,
+      dismissScheduleReminder,
+      browserNotifPermission,
+      requestBrowserNotificationPermission,
+      addStudySchedule,
+      toggleStudySchedule,
+      deleteStudySchedule,
+      testScheduleNotification,
       assistantOpen,
       setAssistantOpen,
       assistantInitialPrompt,
@@ -2030,6 +2354,7 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       updateUserProfile,
       grantAudioConsent,
       addVocabularyWithAI,
+      repairVocabularySentences,
       saveWordFromAnywhere,
       toggleFavoriteVocab,
       deleteVocabulary,
@@ -2057,12 +2382,15 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       account,
       achievements,
       activeRoute,
+      activeScheduleReminder,
+      addStudySchedule,
       addVocabularyWithAI,
       assistantInitialPrompt,
       assistantOpen,
       authError,
       authReady,
       blockUser,
+      browserNotifPermission,
       clearAuthError,
       clearLastError,
       completeGrammarLesson,
@@ -2070,10 +2398,14 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       completeTodayChallenge,
       dailyChallenges,
       darkMode,
+      deleteStudySchedule,
       deleteVocabulary,
+      dismissScheduleReminder,
       enterPreviewMode,
       firebaseUser,
       focusedGrammarTopicId,
+      focusedSentenceGrammar,
+      focusedSentenceWord,
       focusedVocabId,
       globalSearch,
       grammarProgress,
@@ -2087,19 +2419,24 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       logout,
       markNotificationRead,
       navigateToGrammarTopic,
+      navigateToSentenceBuilder,
       navigateToVocabPractice,
       notifications,
       openAssistantWithPrompt,
       profile,
       progress,
       quizResults,
+      quizSessionSeed,
       recordLearningInsight,
       recordPronunciationEvidence,
       recordQuizResult,
       recordVocabReview,
       registerWithEmail,
+      repairVocabularySentences,
       reportUser,
+      requestBrowserNotificationPermission,
       resetPassword,
+      rotateQuizSessionSeed,
       saveAiDailyChallenge,
       saveEvaluationReport,
       savePersonalizedPath,
@@ -2111,8 +2448,11 @@ export function LinguaProvider({ children }: { children: React.ReactNode }) {
       signInWithGoogle,
       speakText,
       speakingSessions,
+      studySchedules,
+      testScheduleNotification,
       toggleDarkMode,
       toggleFavoriteVocab,
+      toggleStudySchedule,
       tutorPrefs,
       unblockUser,
       updateTutorPreferences,

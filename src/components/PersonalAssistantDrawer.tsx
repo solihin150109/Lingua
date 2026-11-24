@@ -11,10 +11,10 @@ interface ChatMessage {
 }
 
 const PRESET_QUESTIONS = [
-  'What should I learn today?',
-  'How can I sound more natural?',
-  'Give me a speaking challenge.',
-  'Why is "Yesterday I go to office" incorrect?',
+  'Kalimat sopan menawarkan menu ke tamu?',
+  'Cara menangani komplain makanan dingin?',
+  'Beri latihan 7 grammar dasar waiter',
+  'Mengapa "Wait, I bring menu" kurang tepat?',
 ];
 
 export function PersonalAssistantDrawer() {
@@ -190,7 +190,7 @@ export function PersonalAssistantDrawer() {
                 Personal AI Coach
               </h2>
               <p className="text-[11px] text-[#718096] truncate">
-                Synced with your vocabulary, grammar &amp; goals
+                Waiter Hospitality · Kosakata &amp; 7 Grammar
               </p>
             </div>
           </div>
@@ -223,10 +223,7 @@ export function PersonalAssistantDrawer() {
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="flex flex-col items-start">
             <div className="max-w-[90%] rounded-xl px-4 py-3 text-xs sm:text-sm leading-relaxed bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] text-[#243447] dark:text-slate-100">
-              Hi {profile?.displayName || 'there'}. I track your {learnerContext.level} level,{' '}
-              {learnerContext.vocabTotal}{' '}
-              {learnerContext.vocabTotal === 1 ? 'vocabulary word' : 'vocabulary words'}, and
-              recent grammar patterns so every recommendation fits your exact study goals.
+              Halo {profile?.displayName || 'Partner'}. Tanyakan frasa waiter hotel/restoran, koreksi kalimat, atau 7 grammar dasar kapan saja.
             </div>
           </div>
           {messages.map((msg) => (

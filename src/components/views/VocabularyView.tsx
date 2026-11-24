@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useLingua } from '../../context/LinguaContext';
 import { findDuplicateVocabulary } from '../../lib/aiMemory';
+import { BASIC_GRAMMAR_STRUCTURES } from '../../lib/curriculum';
 import { validateVocabularyInput } from '../../lib/spacedRepetition';
 import type {
   MasteryStatus,
@@ -55,11 +56,13 @@ export function VocabularyView() {
     focusedVocabId,
     setFocusedVocabId,
     addVocabularyWithAI,
+    repairVocabularySentences,
     toggleFavoriteVocab,
     deleteVocabulary,
     recordVocabReview,
     speakText,
     setActiveRoute,
+    navigateToSentenceBuilder,
   } = useLingua();
   const { showToast } = useToast();
 
@@ -78,6 +81,7 @@ export function VocabularyView() {
 
   const [assistLoading, setAssistLoading] = useState<string | null>(null);
   const [assistResult, setAssistResult] = useState<VocabAssistResult | null>(null);
+  const [repairingSentences, setRepairingSentences] = useState(false);
 
   useEffect(() => {
     if (focusedVocabId) {
@@ -116,9 +120,23 @@ export function VocabularyView() {
   const selectedVocab: VocabularyItem | undefined =
     vocabulary.find((v) => v.id === selectedId) || filteredVocab[0];
 
-  const selectedSentences: VocabularySentence[] = useMemo(
-    () => (selectedVocab ? sentences.filter((s) => s.vocabId === selectedVocab.id) : []),
-    [selectedVocab, sentences]
+  const selectedSentences: VocabularySentence[] = useMemo(() => {
+    if (!selectedVocab) return [];
+    const list = sentences.filter((s) => s.vocabId === selectedVocab.id);
+    const order = BASIC_GRAMMAR_STRUCTURES.map((g) => g.name.toLowerCase());
+    return [...list].sort((a, b) => {
+      const idxA = order.findIndex((name) => a.tense.toLowerCase().includes(name));
+      const idxB = order.findIndex((name) => b.tense.toLowerCase().includes(name));
+      return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+    });
+  }, [selectedVocab, sentences]);
+
+  const basicGrammarCount = useMemo(
+    () =>
+      BASIC_GRAMMAR_STRUCTURES.filter((g) =>
+        selectedSentences.some((s) => s.tense.toLowerCase().includes(g.name.toLowerCase()))
+      ).length,
+    [selectedSentences]
   );
 
   useEffect(() => {
@@ -158,7 +176,7 @@ export function VocabularyView() {
       showToast(
         `Added "${created.word}"`,
         'success',
-        'Complete 14-point linguistic pack and example sentences generated.'
+        'Lengkap dengan arti, IPA, dan 7 kalimat grammar dasar.'
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to generate vocabulary material.';
@@ -215,22 +233,51 @@ export function VocabularyView() {
     showToast(`Removed "${word}"`, 'info');
   };
 
+  const handleRepairBasicSentences = async () => {
+    if (!selectedVocab || repairingSentences) return;
+    setRepairingSentences(true);
+    try {
+      const addedCount = await repairVocabularySentences(selectedVocab);
+      showToast(
+        addedCount > 0 ? `${addedCount} kalimat grammar dasar ditambahkan` : 'Semua 7 grammar dasar sudah lengkap',
+        'success'
+      );
+    } catch (err) {
+      showToast(
+        'Gagal melengkapi kalimat',
+        'error',
+        err instanceof Error ? err.message : 'Silakan coba lagi.'
+      );
+    } finally {
+      setRepairingSentences(false);
+    }
+  };
+
   const shownDuplicate = duplicateTarget || liveDuplicate;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Vocabulary"
-        subtitle="Add any English word or phrase to generate IPA, Indonesian meaning, collocations, phrasal verbs, natural examples, and dialogues."
+        title="Vocabulary Bank"
+        subtitle="Kosakata waiter hotel & restoran lengkap dengan IPA dan 7 grammar dasar."
         action={
-          <button
-            type="button"
-            onClick={() => setActiveRoute('review-vocabulary')}
-            className="px-3.5 py-2 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-white dark:bg-[#16202C] text-xs font-semibold text-[#243447] dark:text-slate-200 hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B] flex items-center gap-2 whitespace-nowrap transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-[#3C8D8A]" />
-            <span>Spaced Repetition Review</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigateToSentenceBuilder(selectedVocab?.word)}
+              className="px-3.5 py-2 rounded-lg bg-[#243B53] hover:bg-[#1B2D40] text-white text-xs font-semibold whitespace-nowrap transition-colors"
+            >
+              Latihan Buat Kalimat
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveRoute('review-vocabulary')}
+              className="px-3.5 py-2 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-white dark:bg-[#16202C] text-xs font-semibold text-[#243447] dark:text-slate-200 hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B] flex items-center gap-2 whitespace-nowrap transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#3C8D8A]" />
+              <span>Flashcard Review</span>
+            </button>
+          </div>
         }
       />
 
@@ -250,7 +297,7 @@ export function VocabularyView() {
                 setNewWord(e.target.value);
                 setDuplicateTarget(null);
               }}
-              placeholder='Add a new English word or phrase (e.g. "collaborate", "resilient", "figure out")'
+              placeholder='Tambah kosakata waiter/hotel (cth: "recommend", "allergy", "beverage")'
               className="w-full px-3.5 py-2.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] bg-[#F7F8FA] dark:bg-[#1E2B3B] text-sm text-[#243447] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#3C8D8A]/40 focus:border-[#3C8D8A]"
             />
           </div>
@@ -287,9 +334,20 @@ export function VocabularyView() {
         )}
 
         {formError && (
-          <p className="text-xs text-[#D65A5A]" role="alert">
-            {formError}
-          </p>
+          <div
+            role="alert"
+            className="p-3 rounded-lg bg-[#FDF2F2] dark:bg-[#D65A5A]/15 border border-[#F5C6C6] dark:border-[#D65A5A]/30 flex flex-wrap items-center justify-between gap-2 text-xs text-[#9E3535] dark:text-rose-200"
+          >
+            <span>{formError}</span>
+            <button
+              type="button"
+              disabled={adding || !newWord.trim()}
+              onClick={(ev) => void handleAddWord(ev as unknown as React.FormEvent)}
+              className="px-3 py-1 rounded-md bg-[#243B53] text-white font-semibold shrink-0 disabled:opacity-60"
+            >
+              Coba Lagi
+            </button>
+          </div>
         )}
 
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2 border-t border-[#E4E8EE] dark:border-[#263344]">
@@ -498,10 +556,17 @@ export function VocabularyView() {
                 ))}
                 <button
                   type="button"
+                  onClick={() => navigateToSentenceBuilder(selectedVocab.word)}
+                  className="px-3 py-1.5 rounded-lg bg-[#243B53] hover:bg-[#1B2D40] text-white text-xs font-semibold transition-colors"
+                >
+                  Buat Kalimat di Sentence Builder
+                </button>
+                <button
+                  type="button"
                   onClick={() => setActiveTab('Practice')}
                   className="px-3 py-1.5 rounded-lg bg-[#3C8D8A] hover:bg-[#317572] text-white text-xs font-semibold transition-colors"
                 >
-                  Practice This Word
+                  Latihan Kata Ini
                 </button>
               </div>
 
@@ -647,19 +712,19 @@ export function VocabularyView() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
                     <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344]">
-                      <div className="text-xs text-[#718096]">Reviews Completed</div>
-                      <div className="text-lg font-mono tabular-nums font-semibold mt-1">
-                        {selectedVocab.reviewCount}
+                      <div className="text-xs text-[#718096]">Kalimat 7 Grammar Dasar</div>
+                      <div className="text-lg font-mono tabular-nums font-semibold mt-1 text-[#3C8D8A]">
+                        {basicGrammarCount} / 7
                       </div>
                     </div>
                     <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344]">
-                      <div className="text-xs text-[#718096]">Mistake Count</div>
-                      <div className="text-lg font-mono tabular-nums font-semibold mt-1">
-                        {selectedVocab.errorCount}
+                      <div className="text-xs text-[#718096]">Jenis Kata</div>
+                      <div className="text-lg font-semibold capitalize mt-1">
+                        {selectedVocab.category}
                       </div>
                     </div>
                     <div className="p-4 rounded-xl bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344]">
-                      <div className="text-xs text-[#718096]">Example Sentences</div>
+                      <div className="text-xs text-[#718096]">Total Contoh Kalimat</div>
                       <div className="text-lg font-mono tabular-nums font-semibold mt-1">
                         {selectedSentences.length}
                       </div>
@@ -670,6 +735,33 @@ export function VocabularyView() {
 
               {activeTab === 'Example Sentences' && (
                 <div className="space-y-4">
+                  <div className="p-3 rounded-lg bg-[#E6F0ED]/50 dark:bg-[#3C8D8A]/10 border border-[#C3DED6] dark:border-[#3C8D8A]/30 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="text-[#243B53] dark:text-slate-200 font-medium">
+                      7 grammar dasar: Simple Present, Continuous, Past, Future, Perfect, Modal Verbs, Imperatives.
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      {basicGrammarCount < 7 && (
+                        <button
+                          type="button"
+                          disabled={repairingSentences}
+                          onClick={handleRepairBasicSentences}
+                          className="px-2.5 py-1 rounded-md bg-[#243B53] text-white font-semibold flex items-center gap-1.5 disabled:opacity-60"
+                        >
+                          {repairingSentences && <Loader2 className="w-3 h-3 animate-spin" />}
+                          <span>
+                            {repairingSentences ? 'Melengkapi...' : `Lengkapi 7 Grammar (${basicGrammarCount}/7)`}
+                          </span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => navigateToSentenceBuilder(selectedVocab.word)}
+                        className="font-semibold text-[#3C8D8A] hover:underline"
+                      >
+                        Coba buat kalimat sendiri →
+                      </button>
+                    </div>
+                  </div>
                   {selectedSentences.length === 0 ? (
                     <p className="text-xs text-[#718096]">
                       No sentences generated for this word yet.
@@ -690,14 +782,23 @@ export function VocabularyView() {
                               {s.translationId}
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => speakText(s.sentence)}
-                            aria-label={`Listen to sentence: ${s.sentence}`}
-                            className="p-2 rounded-lg bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] text-[#3C8D8A] shrink-0"
-                          >
-                            <Volume2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => navigateToSentenceBuilder(selectedVocab.word, s.tense)}
+                              className="px-2.5 py-1.5 rounded-lg border border-[#E4E8EE] dark:border-[#263344] text-[11px] font-semibold text-[#243447] dark:text-slate-200 hover:bg-[#F7F8FA] dark:hover:bg-[#1E2B3B]"
+                            >
+                              Latih Pola Ini
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => speakText(s.sentence)}
+                              aria-label={`Listen to sentence: ${s.sentence}`}
+                              className="p-2 rounded-lg bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] text-[#3C8D8A]"
+                            >
+                              <Volume2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
                         <div className="p-3 rounded-lg bg-[#F7F8FA] dark:bg-[#1E2B3B] space-y-1.5 text-xs">
@@ -896,6 +997,7 @@ function VocabularyPracticeBox({
   onResult: (wasCorrect: boolean) => Promise<void>;
 }) {
   const [mode, setMode] = useState<PracticeMode>('Guess Meaning');
+  const [sentenceIdx, setSentenceIdx] = useState(0);
   const [userInput, setUserInput] = useState('');
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
   const [arrangedWords, setArrangedWords] = useState<string[]>([]);
@@ -907,8 +1009,17 @@ function VocabularyPracticeBox({
     naturalAlternative?: string;
   } | null>(null);
 
-  const sampleSentence = sentences[0]?.sentence || `I use ${vocab.word} every day.`;
-  const sampleTranslation = sentences[0]?.translationId || vocab.meaningId;
+  useEffect(() => {
+    setSentenceIdx(0);
+    setUserInput('');
+    setSelectedChoice(null);
+    setArrangedWords([]);
+    setFeedback(null);
+  }, [vocab.id]);
+
+  const activeSentence = sentences[sentenceIdx % Math.max(1, sentences.length)];
+  const sampleSentence = activeSentence?.sentence || `I use ${vocab.word} every day.`;
+  const sampleTranslation = activeSentence?.translationId || vocab.meaningId;
 
   const distractors = useMemo(() => {
     const others = allVocabulary
@@ -1018,6 +1129,31 @@ function VocabularyPracticeBox({
           </button>
         ))}
       </div>
+
+      {mode !== 'Guess Meaning' && sentences.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-[#718096] font-medium">Pola kalimat:</span>
+          {sentences.slice(0, 7).map((s, sIdx) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => {
+                setSentenceIdx(sIdx);
+                setUserInput('');
+                setArrangedWords([]);
+                setFeedback(null);
+              }}
+              className={`px-2 py-1 rounded-md border transition-colors ${
+                sentenceIdx === sIdx
+                  ? 'border-[#3C8D8A] bg-[#E6F0ED] dark:bg-[#3C8D8A]/20 text-[#243B53] dark:text-[#E6F0ED] font-semibold'
+                  : 'border-[#E4E8EE] dark:border-[#263344] text-[#718096]'
+              }`}
+            >
+              {s.tense}
+            </button>
+          ))}
+        </div>
+      )}
 
       {mode === 'Guess Meaning' ? (
         <div className="space-y-3">

@@ -13,20 +13,16 @@ export type TutorTeachingMode =
 
 export type NavRoute =
   | 'dashboard'
-  | 'learning-path'
-  | 'daily-challenge'
   | 'vocabulary'
   | 'grammar'
   | 'sentence-builder'
   | 'listening'
   | 'pronunciation'
-  | 'ai-tutor'
   | 'speaking-community'
   | 'simulator'
   | 'speaking-history'
-  | 'achievements'
-  | 'analytics'
   | 'review-vocabulary'
+  | 'schedule'
   | 'profile'
   | 'settings';
 
@@ -304,6 +300,8 @@ export interface SentenceEvaluation {
 
 export interface SpeakingGuideScript {
   topic: string;
+  roleA?: string;
+  roleB?: string;
   starterPrompts: {
     speakerRole: 'A' | 'B';
     line: string;
@@ -446,4 +444,24 @@ export interface AssistantActionLink {
   label: string;
   route: NavRoute;
   topicId?: string;
+}
+
+export interface StudyScheduleItem {
+  id: string;
+  title: string;
+  focusArea: 'vocabulary' | 'grammar' | 'sentence-builder' | 'speaking-community';
+  timeHHMM: string;
+  days: number[]; // 0=Sun..6=Sat; empty means every day
+  enabled: boolean;
+  note?: string;
+  lastTriggeredDateKey?: string;
+  createdAt: string;
+}
+
+export interface ActiveScheduleReminder {
+  id: string;
+  title: string;
+  focusArea: NavRoute;
+  timeHHMM: string;
+  note?: string;
 }

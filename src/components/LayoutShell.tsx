@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import {
-  Award,
-  BarChart3,
   Bell,
+  BellRing,
   BookOpen,
-  Bot,
+  CalendarClock,
   ChevronLeft,
   ChevronRight,
   Headphones,
@@ -45,10 +44,15 @@ const NAV_GROUPS: NavGroup[] = [
     items: [{ id: 'dashboard', label: 'Dashboard', icon: Home }],
   },
   {
-    title: 'LEARNING',
+    title: 'VOCABULARY & GRAMMAR',
     items: [
-      { id: 'vocabulary', label: 'Vocabulary', icon: BookOpen },
-      { id: 'grammar', label: 'Grammar', icon: Layers },
+      {
+        id: 'vocabulary',
+        label: 'Vocabulary Bank',
+        icon: BookOpen,
+        matchRoutes: ['vocabulary', 'review-vocabulary'],
+      },
+      { id: 'grammar', label: 'Grammar Dasar', icon: Layers },
       { id: 'sentence-builder', label: 'Sentence Builder', icon: PenTool },
       {
         id: 'listening',
@@ -59,48 +63,35 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    title: 'SPEAKING',
+    title: 'GUIDED SPEAKING',
     items: [
-      { id: 'ai-tutor', label: 'AI Tutor', icon: Bot },
-      { id: 'speaking-community', label: 'Speaking Partner', icon: Users },
+      { id: 'speaking-community', label: 'Speaking Partner (Script)', icon: Users },
       {
         id: 'simulator',
-        label: 'Conversation Practice',
+        label: 'Roleplay Waiter',
         icon: MessageSquare,
         matchRoutes: ['simulator', 'speaking-history'],
       },
     ],
   },
   {
-    title: 'PROGRESS',
-    items: [
-      {
-        id: 'analytics',
-        label: 'Learning Progress',
-        icon: BarChart3,
-        matchRoutes: ['analytics', 'learning-path', 'daily-challenge', 'review-vocabulary'],
-      },
-      { id: 'achievements', label: 'Achievements', icon: Award },
-    ],
+    title: 'SCHEDULE',
+    items: [{ id: 'schedule', label: 'Jadwal & Notifikasi', icon: CalendarClock }],
   },
 ];
 
 const ROUTE_META: Record<NavRoute, { section: string; title: string }> = {
   dashboard: { section: 'Overview', title: 'Dashboard' },
-  vocabulary: { section: 'Learning', title: 'Vocabulary' },
-  grammar: { section: 'Learning', title: 'Grammar' },
-  'sentence-builder': { section: 'Learning', title: 'Sentence Builder' },
-  listening: { section: 'Learning', title: 'Listening & Pronunciation' },
-  pronunciation: { section: 'Learning', title: 'Listening & Pronunciation' },
-  'ai-tutor': { section: 'Speaking', title: 'AI Tutor' },
-  'speaking-community': { section: 'Speaking', title: 'Speaking Partner' },
-  simulator: { section: 'Speaking', title: 'Conversation Practice' },
-  'speaking-history': { section: 'Speaking', title: 'Conversation Practice' },
-  analytics: { section: 'Progress', title: 'Learning Progress' },
-  'learning-path': { section: 'Progress', title: 'Learning Path' },
-  'daily-challenge': { section: 'Progress', title: 'Daily Challenge' },
-  'review-vocabulary': { section: 'Progress', title: 'Vocabulary Review' },
-  achievements: { section: 'Progress', title: 'Achievements' },
+  vocabulary: { section: 'Vocabulary & Grammar', title: 'Vocabulary Bank' },
+  'review-vocabulary': { section: 'Vocabulary & Grammar', title: 'Flashcard Review' },
+  grammar: { section: 'Vocabulary & Grammar', title: '7 Grammar Dasar' },
+  'sentence-builder': { section: 'Vocabulary & Grammar', title: 'Sentence Builder' },
+  listening: { section: 'Vocabulary & Grammar', title: 'Listening & Pronunciation' },
+  pronunciation: { section: 'Vocabulary & Grammar', title: 'Listening & Pronunciation' },
+  'speaking-community': { section: 'Guided Speaking', title: 'Speaking Partner (Script)' },
+  simulator: { section: 'Guided Speaking', title: 'Roleplay Waiter' },
+  'speaking-history': { section: 'Guided Speaking', title: 'Riwayat Speaking' },
+  schedule: { section: 'Schedule', title: 'Jadwal Belajar & Notifikasi' },
   settings: { section: 'Account', title: 'Settings' },
   profile: { section: 'Account', title: 'Profile' },
 };
@@ -114,6 +105,8 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     profile,
     notifications,
     markNotificationRead,
+    activeScheduleReminder,
+    dismissScheduleReminder,
     darkMode,
     toggleDarkMode,
     logout,
@@ -173,7 +166,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                   LINGUA
                 </div>
                 <div className="text-[10px] font-medium text-[#718096] dark:text-slate-400 mt-1 whitespace-nowrap">
-                  Learn. Practice. Speak.
+                  Hotel &amp; Restaurant Waiter
                 </div>
               </div>
             )}
@@ -292,7 +285,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                     LINGUA
                   </div>
                   <div className="text-[10px] text-[#718096] dark:text-slate-400 mt-1">
-                    Learn. Practice. Speak.
+                    Hotel &amp; Restaurant Waiter
                   </div>
                 </div>
               </div>
@@ -399,7 +392,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 type="search"
                 value={globalSearch}
                 onChange={(e) => setGlobalSearch(e.target.value)}
-                placeholder="Search..."
+                placeholder="Cari kosakata / grammar..."
                 aria-label="Search vocabulary or grammar topics"
                 className="w-full pl-8 pr-2.5 py-1.5 text-xs sm:text-sm bg-[#F7F8FA] dark:bg-[#1E2B3B] border border-[#E4E8EE] dark:border-[#263344] rounded-lg text-[#243447] dark:text-slate-100 placeholder:text-[#A0AEC0] focus:outline-none focus:ring-2 focus:ring-[#3C8D8A]/40 focus:border-[#3C8D8A]"
               />
@@ -437,18 +430,27 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-[#16202C] border border-[#E4E8EE] dark:border-[#263344] rounded-xl shadow-md p-3 z-40">
                   <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#E4E8EE] dark:border-[#263344]">
                     <span className="text-xs font-semibold text-[#243447] dark:text-white">
-                      Notifications
+                      Notifikasi &amp; Jadwal
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setNotifOpen(false)}
-                      className="text-xs text-[#718096] hover:text-[#243447] dark:hover:text-white"
-                    >
-                      Close
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleNavClick('schedule')}
+                        className="text-xs font-semibold text-[#3C8D8A] hover:underline"
+                      >
+                        Atur Jadwal
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNotifOpen(false)}
+                        className="text-xs text-[#718096] hover:text-[#243447] dark:hover:text-white"
+                      >
+                        Tutup
+                      </button>
+                    </div>
                   </div>
                   {notifications.length === 0 ? (
-                    <p className="text-xs text-[#718096] py-5 text-center">No notifications yet.</p>
+                    <p className="text-xs text-[#718096] py-5 text-center">Belum ada notifikasi.</p>
                   ) : (
                     <div className="max-h-72 overflow-y-auto space-y-1.5">
                       {notifications.slice(0, 8).map((n) => (
@@ -511,7 +513,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                       {profile?.displayName}
                     </div>
                     <div className="text-[11px] text-[#718096] dark:text-slate-400">
-                      {profile?.level} · {profile?.preferredAccent}
+                      {profile?.preferredAccent} English
                     </div>
                   </div>
                   <button
@@ -562,6 +564,48 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
+        {/* Active Study Schedule Notification Banner */}
+        {activeScheduleReminder && (
+          <div
+            role="status"
+            className="mx-4 lg:mx-8 mt-4 p-4 rounded-xl bg-[#243B53] text-white border border-[#3C8D8A] flex flex-wrap items-center justify-between gap-3 shadow-sm"
+          >
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-[#3C8D8A]/30 text-[#E6F0ED] shrink-0">
+                <BellRing className="w-4 h-4" />
+              </div>
+              <div className="space-y-0.5 text-xs">
+                <div className="font-semibold text-sm">
+                  Waktunya Belajar: {activeScheduleReminder.title} ({activeScheduleReminder.timeHHMM})
+                </div>
+                {activeScheduleReminder.note && (
+                  <div className="text-slate-200">{activeScheduleReminder.note}</div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = activeScheduleReminder.focusArea;
+                  dismissScheduleReminder();
+                  setActiveRoute(target);
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-[#3C8D8A] hover:bg-[#317572] text-white text-xs font-semibold transition-colors"
+              >
+                Mulai Sekarang
+              </button>
+              <button
+                type="button"
+                onClick={dismissScheduleReminder}
+                className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium text-white transition-colors"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        )}
+
         {lastError && (
           <div className="mx-4 lg:mx-8 mt-4 p-3 rounded-lg bg-[#FDF2F2] dark:bg-[#D65A5A]/15 border border-[#F5C6C6] dark:border-[#D65A5A]/40 flex items-center justify-between gap-3 text-xs text-[#9E3535] dark:text-rose-200">
             <span>{lastError}</span>
@@ -589,21 +633,28 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           { id: 'dashboard' as NavRoute, label: 'Home', icon: Home, match: ['dashboard'] },
           {
             id: 'vocabulary' as NavRoute,
-            label: 'Learn',
+            label: 'Vocab',
             icon: BookOpen,
-            match: ['vocabulary', 'grammar', 'sentence-builder', 'listening', 'pronunciation'],
+            match: [
+              'vocabulary',
+              'grammar',
+              'sentence-builder',
+              'listening',
+              'pronunciation',
+              'review-vocabulary',
+            ],
           },
           {
-            id: 'ai-tutor' as NavRoute,
+            id: 'speaking-community' as NavRoute,
             label: 'Speak',
-            icon: Bot,
-            match: ['ai-tutor', 'speaking-community', 'simulator', 'speaking-history'],
+            icon: Users,
+            match: ['speaking-community', 'simulator', 'speaking-history'],
           },
           {
-            id: 'analytics' as NavRoute,
-            label: 'Progress',
-            icon: BarChart3,
-            match: ['analytics', 'achievements', 'learning-path', 'daily-challenge', 'review-vocabulary'],
+            id: 'schedule' as NavRoute,
+            label: 'Jadwal',
+            icon: CalendarClock,
+            match: ['schedule'],
           },
         ].map((item) => {
           const Icon = item.icon;
